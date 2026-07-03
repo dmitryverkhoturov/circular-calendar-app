@@ -300,6 +300,7 @@ fun drawWheel(
                 b.event.color, alpha, settings.nowAtBottom,
                 isDayPlus = sweepFrac >= 1.0 / 366.0,
                 ccw = settings.counterClockwise,
+                camScale = lod.camScale,
             )
         }
 
@@ -356,7 +357,7 @@ fun drawWheel(
 
     canvas.drawLine(cx, cy, tipX, tipY, Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = accent
-        strokeWidth = 1.5f * unit * zk
+        strokeWidth = 3.0f * unit * zk
         strokeCap = Paint.Cap.ROUND
     })
 
@@ -450,6 +451,7 @@ private fun drawBandTitle(
     nowAtBottom: Boolean,
     isDayPlus: Boolean,
     ccw: Boolean,
+    camScale: Float,
 ) {
     if (title.isBlank()) return
     val text = if (title.length > 200) title.take(200).trimEnd() + "…" else title
@@ -461,12 +463,16 @@ private fun drawBandTitle(
     paint.typeface = Typeface.DEFAULT
 
     if (isDayPlus) {
-        drawArcTitle(canvas, paint, text, cx, cy, r, bandW, a0, a1, nowAtBottom)
+        drawArcTitle(canvas, paint, text, cx, cy, r, bandW, a0, a1, nowAtBottom, camScale)
     } else {
-        drawRadialTitle(canvas, paint, text, cx, cy, r, bandW, a0, a1, ccw)
+        drawRadialTitle(canvas, paint, text, cx, cy, r, bandW, a0, a1, ccw, camScale)
     }
     paint.textAlign = Paint.Align.CENTER
 }
+
+// Порог появления текста: пишем, только когда кегль на экране уже читаем.
+// Мелким событиям кегль ужимается сильнее → они проявляются позже (по зуму).
+private const val TEXT_MIN_SCREEN_FS = 5f
 
 /** Текст по дуге для событий от одного дня. Рисуется ВСЕГДА (кегль ужимается). */
 private fun drawArcTitle(
@@ -480,6 +486,7 @@ private fun drawArcTitle(
     a0: Double,
     a1: Double,
     nowAtBottom: Boolean,
+    camScale: Float,
 ) {
     val sweepAbs = abs(a1 - a0)
     val arcLen = (sweepAbs * r).toFloat()
@@ -513,6 +520,7 @@ private fun drawArcTitle(
         fs *= 0.84f
     }
     val ls = lines ?: return
+    if (fs * camScale < TEXT_MIN_SCREEN_FS) return // проявится при приближении
 
     paint.textSize = fs
     val base = -(paint.ascent() + paint.descent()) / 2f
@@ -540,6 +548,7 @@ private fun drawRadialTitle(
     a0: Double,
     a1: Double,
     ccw: Boolean,
+    camScale: Float,
 ) {
     val amid = (a0 + a1) / 2
     val angW = (abs(a1 - a0) * r).toFloat() // угловая (узкая) ширина чанка
@@ -560,6 +569,7 @@ private fun drawRadialTitle(
         fs *= 0.84f
     }
     val ls = lines ?: return
+    if (fs * camScale < TEXT_MIN_SCREEN_FS) return // проявится при приближении
 
     paint.textSize = fs
 
