@@ -18,8 +18,7 @@ import java.time.LocalDateTime
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MainActivity — тонкая нативная оболочка: круг + кнопка настроек +
-// панель настроек + бейдж диагностики календаря. Порт UI из main.dart,
-// но настоящими Android-вьюхами, без единой зависимости.
+// панель настроек. Настоящие Android-вьюхи, без единой зависимости.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class MainActivity : Activity() {
@@ -27,14 +26,11 @@ class MainActivity : Activity() {
     private lateinit var root: FrameLayout
     private lateinit var wheel: WheelView
     private lateinit var settingsButton: TextView
-    private lateinit var badge: TextView
     private var panel: View? = null
 
     private var settings = WheelSettings()
     private var events: List<CalendarEvent> = emptyList()
     private var calendars: List<CalendarInfo>? = null
-    private var diag: CalendarRepo.Diagnostics? = null
-    private var usingRealCalendar = false
     private var now: LocalDateTime = LocalDateTime.now()
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -119,19 +115,6 @@ class MainActivity : Activity() {
             leftMargin = dp(12f); bottomMargin = dp(12f)
         })
 
-        // Бейдж диагностики календаря — внизу справа; тап = повторная загрузка.
-        badge = TextView(this).apply {
-            textSize = 10f
-            setPadding(dp(8f), dp(4f), dp(8f), dp(4f))
-            visibility = View.GONE
-            setOnClickListener { requestCalendarOrLoad() }
-        }
-        root.addView(badge, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT).apply {
-            gravity = Gravity.BOTTOM or Gravity.END
-            rightMargin = dp(12f); bottomMargin = dp(12f)
-        })
-
         setContentView(root)
 
         // Мок всегда — виден сразу; реальные календари загрузятся асинхронно.
@@ -140,6 +123,12 @@ class MainActivity : Activity() {
         mainHandler.postDelayed(nowTicker, 60_000)
 
         requestCalendarOrLoad()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Обновление событий при каждом возврате в приложение.
+        if (CalendarRepo.hasPermission(this)) loadCalendarData()
     }
 
     override fun onDestroy() {
@@ -167,18 +156,13 @@ class MainActivity : Activity() {
         Thread {
             val (d, evs) = CalendarRepo.loadAll(this, now.year)
             mainHandler.post {
-                diag = d
                 if (d.ok) {
                     calendars = d.calendars
                     events = evs
-                    usingRealCalendar = true
+                    now = LocalDateTime.now()
                     migrateFilterIfStale(d.calendars)
-                } else if (d.permissionGranted && d.error == null) {
-                    // Разрешение есть, но календарей нет: остаёмся на моке,
-                    // диагностика на бейдже.
-                    calendars = d.calendars
                 }
-                updateBadge()
+                // Нет календарей/разрешения — тихо остаёмся на моке.
                 wheel.update(settings, events, now)
                 rebuildPanelIfOpen()
             }
@@ -197,18 +181,6 @@ class MainActivity : Activity() {
             settings = settings.copy(calendarFilter = CalendarFilter())
             saveSettings()
         }
-    }
-
-    private fun updateBadge() {
-        val d = diag ?: return
-        badge.visibility = View.VISIBLE
-        badge.text = "● " + d.badgeText()
-        val good = usingRealCalendar && d.ok
-        badge.setTextColor(withAlpha(if (good) 0xFF88CC88.toInt() else 0xFFCC8888.toInt(), 0.90f))
-        badge.background = roundedBg(
-            withAlpha(if (good) 0xFF0D2B0D.toInt() else 0xFF2B0D0D.toInt(), 0.92f), 6f,
-            strokeColor = withAlpha(if (good) 0xFF4CAF50.toInt() else 0xFFF44336.toInt(), 0.45f),
-        )
     }
 
     // ── Панель настроек ──────────────────────────────────────────────────────
@@ -236,7 +208,6 @@ class MainActivity : Activity() {
             panel = null
             togglePanel()
         }
-        updateBadge()
     }
 
     private fun roundedBg(
@@ -385,31 +356,20 @@ class MainActivity : Activity() {
             }
         }
 
-        // Диагностика провайдера — полная картина для расследования
-        // «разрешение есть, календарей нет».
-        diag?.let { d ->
-            space(14f)
-            col.addView(label("Диагностика"))
-            space(6f)
-            val sb = StringBuilder()
-            sb.append("провайдер: ").append(if (d.providerPresent) "есть" else "НЕТ").append('\n')
-            sb.append("разрешение: ").append(if (d.permissionGranted) "есть" else "нет").append('\n')
-            sb.append("календарей: ").append(d.calendars.size)
-                .append(" (видимых ").append(d.visibleCount).append(")\n")
-            sb.append("событий (2 года): ").append(d.eventCount)
-            val accounts = d.calendars.map { "${it.accountName} [${it.accountType}]" }.distinct()
-            if (accounts.isNotEmpty()) {
-                sb.append("\nаккаунты:\n").append(accounts.joinToString("\n") { "· $it" })
-            } else if (d.permissionGranted) {
-                sb.append("\nаккаунтов с календарями нет —\nпроверь синхронизацию календаря\nв настройках аккаунта Google")
-            }
-            d.error?.let { sb.append("\nошибка: ").append(it) }
-            col.addView(TextView(this).apply {
-                text = sb.toString()
-                textSize = 10f
-                setTextColor(withAlpha(WHITE, 0.40f))
-            })
-        }
+        // Обновление событий вручную.
+        space(14f)
+        col.addView(TextView(this).apply {
+            text = "Обновить события"
+            textSize = 12f
+            gravity = Gravity.CENTER
+            setPadding(0, dp(7f), 0, dp(7f))
+            setTextColor(withAlpha(WHITE, 0.75f))
+            background = roundedBg(withAlpha(WHITE, 0.06f), 6f,
+                strokeColor = withAlpha(WHITE, 0.10f))
+            setOnClickListener { requestCalendarOrLoad() }
+        }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT))
 
         val scroll = ScrollView(this).apply {
             isVerticalScrollBarEnabled = false

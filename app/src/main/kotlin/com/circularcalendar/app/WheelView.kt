@@ -3,6 +3,7 @@ package com.circularcalendar.app
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Matrix
+import android.graphics.Paint
 import android.graphics.RenderNode
 import android.view.Choreographer
 import android.view.GestureDetector
@@ -12,6 +13,7 @@ import java.time.Duration
 import java.time.LocalDateTime
 import kotlin.math.abs
 import kotlin.math.atan2
+import kotlin.math.ceil
 import kotlin.math.exp
 import kotlin.math.hypot
 import kotlin.math.max
@@ -20,12 +22,13 @@ import kotlin.math.min
 // ─────────────────────────────────────────────────────────────────────────────
 // WheelView — сцена + камера + жесты.
 //
-// Рендер: сцена пишется в RenderNode (display list кэшируется на GPU);
-// на кадр — только canvas.concat(camera) + drawRenderNode. Пере-запись сцены —
-// ТОЛЬКО когда LOD-окно устарело: зум ушёл за порог ×1.35 или видимый сектор
-// вышел за записанное (с запасом) окно. Внутри записи рендерер отсекает
-// события мельче полпикселя и всё вне видимого сектора — поэтому даже тысячи
-// экземпляров событий не гробят кадр.
+// Рендер: сцена пишется в RenderNode с ВКАТАННОЙ камерой и кэшируется как
+// растровый слой (setUseCompositingLayer) — квадрат размером с диагональ
+// экрана, чтобы вращение никогда не открывало пустых углов. На кадр —
+// только дельта-трансформ (camera·recCamera⁻¹) + drawRenderNode: одна
+// текстура, никакой растеризации сцены. Перезапись слоя — по порогам зума
+// (×1.25), выходу окна видимости за записанный запас, выходу экрана за
+// квадрат слоя, и в покое (для идеальной чёткости).
 //
 // Жесты — порт из Flutter-версии: осевой замок (порог 10dp, гистерезис 1.4),
 // центр = панорама, два пальца = пан+пинч, инерция exp(-2.2·dt), даблтап = сброс.
@@ -34,9 +37,12 @@ import kotlin.math.min
 class WheelView(context: Context) : View(context) {
 
     private val camera = Matrix()
-    private val node = RenderNode("wheel")
+    private val node = RenderNode("wheel").apply {
+        setUseCompositingLayer(true, Paint(Paint.FILTER_BITMAP_FLAG))
+    }
 
     private var settings = WheelSettings()
+    private var events: List<CalendarEvent> = emptyList()
     private var bands: List<EventBand> = emptyList()
     private var now: LocalDateTime = LocalDateTime.now()
 
@@ -46,11 +52,19 @@ class WheelView(context: Context) : View(context) {
     private var recFull = true
     private var recWinStart = 0.0
     private var recWinLen = 1.0
+    private val recCam = Matrix()
+    private val recCamInv = Matrix()
+    private var nodeLeft = 0
+    private var nodeTop = 0
+    private var nodeSize = 0
+    private var crispPending = false
+
+    private val deltaM = Matrix()
+    private val tmpM = Matrix()
+    private val tmpPts = FloatArray(8)
+    private val tmpVals = FloatArray(9)
 
     // ── Камера ────────────────────────────────────────────────────────────────
-
-    private val tmpPts = FloatArray(8)
-    private val invCamera = Matrix()
 
     private fun wheelCenterX(): Float {
         tmpPts[0] = width / 2f; tmpPts[1] = height / 2f
@@ -126,6 +140,7 @@ class WheelView(context: Context) : View(context) {
                 if (abs(angVel) < 0.05) {
                     angVel = 0.0
                     inertiaRunning = false
+                    requestCrisp()
                     return
                 }
             }
@@ -146,12 +161,20 @@ class WheelView(context: Context) : View(context) {
             Choreographer.getInstance().postFrameCallback(inertiaCallback)
         } else {
             angVel = 0.0
+            requestCrisp()
         }
     }
 
     fun resetCamera() {
         stopInertia()
         camera.reset()
+        sceneDirty = true
+        invalidate()
+    }
+
+    /** В покое перезаписать слой точно под текущую камеру — идеальная чёткость. */
+    private fun requestCrisp() {
+        crispPending = true
         invalidate()
     }
 
@@ -264,11 +287,15 @@ class WheelView(context: Context) : View(context) {
             }
 
             MotionEvent.ACTION_UP -> {
-                if (gestureMode == 1) startInertia() else angVel = 0.0
+                if (gestureMode == 1) startInertia() else {
+                    angVel = 0.0
+                    requestCrisp()
+                }
             }
 
             MotionEvent.ACTION_CANCEL -> {
                 angVel = 0.0
+                requestCrisp()
             }
         }
         return true
@@ -278,10 +305,10 @@ class WheelView(context: Context) : View(context) {
 
     fun update(settings: WheelSettings, events: List<CalendarEvent>, now: LocalDateTime) {
         this.settings = settings
+        this.events = events
         this.now = now
         val filtered = events.filter { settings.calendarFilter.allows(it) }
-        // Укладка по слоям — одна на смену данных (стабильные кольца при зуме).
-        this.bands = buildEventBands(filtered, now.year)
+        this.bands = buildEventBands(filtered, now.year, nowFrac())
         setBackgroundColor(settings.theme.background)
         sceneDirty = true
         invalidate()
@@ -291,26 +318,32 @@ class WheelView(context: Context) : View(context) {
         sceneDirty = true
     }
 
+    private fun nowFrac(): Double {
+        val year = now.year
+        val yearStart = LocalDateTime.of(year, 1, 1, 0, 0)
+        val totalSec = Duration.between(yearStart, LocalDateTime.of(year + 1, 1, 1, 0, 0))
+            .seconds.toDouble()
+        return Duration.between(yearStart, now).seconds.toDouble() / totalSec
+    }
+
     /**
      * Видимое окно в frac-пространстве: [start, len] или null = весь круг.
-     * Углы экрана переводятся в контент-пространство; если центр круга на
-     * экране — видно всё; иначе угловой диапазон = углы 4 углов экрана
-     * (экстремумы atan2 по выпуклому четырёхугольнику — в вершинах).
+     * Экстремумы atan2 по выпуклому четырёхугольнику (экран в контент-
+     * пространстве) достигаются в вершинах.
      */
     private fun computeWindow(): DoubleArray? {
         if (currentScale() <= 1.05f) return null
-        if (!camera.invert(invCamera)) return null
+        if (!camera.invert(tmpM)) return null
 
         val w = width.toFloat(); val h = height.toFloat()
         tmpPts[0] = 0f; tmpPts[1] = 0f
         tmpPts[2] = w; tmpPts[3] = 0f
         tmpPts[4] = w; tmpPts[5] = h
         tmpPts[6] = 0f; tmpPts[7] = h
-        invCamera.mapPoints(tmpPts)
+        tmpM.mapPoints(tmpPts)
 
         val cx = w / 2f; val cy = h / 2f
 
-        // Центр внутри выпуклого четырёхугольника? (знаки векторных произведений)
         var pos = false; var neg = false
         for (i in 0 until 4) {
             val x1 = tmpPts[i * 2]; val y1 = tmpPts[i * 2 + 1]
@@ -318,9 +351,8 @@ class WheelView(context: Context) : View(context) {
             val cross = (x2 - x1) * (cy - y1) - (y2 - y1) * (cx - x1)
             if (cross > 0) pos = true else if (cross < 0) neg = true
         }
-        if (!(pos && neg)) return null // центр виден → весь круг
+        if (!(pos && neg)) return null // центр круга на экране → видно всё
 
-        // Углы вершин, развёрнутые вокруг первого.
         val a0 = atan2((tmpPts[1] - cy).toDouble(), (tmpPts[0] - cx).toDouble())
         var aMin = a0; var aMax = a0
         for (i in 1 until 4) {
@@ -330,50 +362,78 @@ class WheelView(context: Context) : View(context) {
             aMin = min(aMin, a); aMax = max(aMax, a)
         }
 
-        // Угол → frac (инверсия angleOf из рендерера).
-        val year = now.year
-        val yearStart = LocalDateTime.of(year, 1, 1, 0, 0)
-        val totalSec = Duration.between(yearStart, LocalDateTime.of(year + 1, 1, 1, 0, 0))
-            .seconds.toDouble()
-        val nowFrac = Duration.between(yearStart, now).seconds.toDouble() / totalSec
+        val nf = nowFrac()
         val dir = if (settings.counterClockwise) 1.0 else -1.0
         val anchorA = if (settings.nowAtBottom) Math.PI / 2 else -Math.PI / 2
-        val f1 = nowFrac + dir * (anchorA - aMin) / (2 * Math.PI)
-        val f2 = nowFrac + dir * (anchorA - aMax) / (2 * Math.PI)
+        val f1 = nf + dir * (anchorA - aMin) / (2 * Math.PI)
+        val f2 = nf + dir * (anchorA - aMax) / (2 * Math.PI)
         var start = min(f1, f2)
         val len = abs(f1 - f2)
         if (len >= 0.999) return null
-        start -= Math.floor(start) // нормализация в [0,1)
+        start -= Math.floor(start)
         return doubleArrayOf(start, len)
+    }
+
+    /** Экран (через дельту) не выходит за квадрат слоя? */
+    private fun screenInsideNode(): Boolean {
+        if (nodeSize <= 0) return false
+        if (!deltaM.invert(tmpM)) return false
+        val w = width.toFloat(); val h = height.toFloat()
+        tmpPts[0] = 0f; tmpPts[1] = 0f
+        tmpPts[2] = w; tmpPts[3] = 0f
+        tmpPts[4] = w; tmpPts[5] = h
+        tmpPts[6] = 0f; tmpPts[7] = h
+        tmpM.mapPoints(tmpPts)
+        val m = 4f // допуск, px
+        for (i in 0 until 4) {
+            val x = tmpPts[i * 2]; val y = tmpPts[i * 2 + 1]
+            if (x < nodeLeft + m || y < nodeTop + m ||
+                x > nodeLeft + nodeSize - m || y > nodeTop + nodeSize - m
+            ) return false
+        }
+        return true
+    }
+
+    private fun deltaNontrivial(): Boolean {
+        deltaM.getValues(tmpVals)
+        val sc = hypot(tmpVals[0], tmpVals[3])
+        if (abs(sc - 1f) > 0.005f) return true
+        if (abs(atan2(tmpVals[3].toDouble(), tmpVals[0].toDouble())) > 0.003) return true
+        if (abs(tmpVals[2]) > 0.5f || abs(tmpVals[5]) > 0.5f) return true
+        return false
     }
 
     private fun rerecordNeeded(win: DoubleArray?): Boolean {
         if (sceneDirty) return true
         val ratio = currentScale() / recScale
-        if (ratio > 1.35f || ratio < 0.74f) return true
-        if (recFull) return false
-        if (win == null) return true
-        // Текущее окно должно лежать внутри записанного (mod 1).
-        for (k in -1..1) {
-            val s = win[0] + k
-            if (s >= recWinStart - 1e-9 && s + win[1] <= recWinStart + recWinLen + 1e-9) return false
+        if (ratio > 1.25f || ratio < 0.8f) return true
+        if (!screenInsideNode()) return true
+        if (!recFull) {
+            if (win == null) return true
+            var inside = false
+            for (k in -1..1) {
+                val s = win[0] + k
+                if (s >= recWinStart - 1e-9 && s + win[1] <= recWinStart + recWinLen + 1e-9) {
+                    inside = true; break
+                }
+            }
+            if (!inside) return true
         }
-        return true
+        return false
     }
 
     private fun recordScene(win: DoubleArray?) {
         if (width <= 0 || height <= 0) return
         val scale = currentScale()
-        // Запас 35% длины окна с каждой стороны — панорама не требует
-        // перезаписи каждый кадр.
+
         val lod: Lod
         if (win == null) {
             lod = Lod(camScale = scale)
             recFull = true
         } else {
-            val padded = win[1] * 0.35
-            val start = win[0] - padded
-            val len = win[1] + 2 * padded
+            val pad = win[1] * 0.35
+            val start = win[0] - pad
+            val len = win[1] + 2 * pad
             if (len >= 0.999) {
                 lod = Lod(camScale = scale)
                 recFull = true
@@ -386,10 +446,19 @@ class WheelView(context: Context) : View(context) {
             }
         }
         recScale = scale
+        recCam.set(camera)
+        recCam.invert(recCamInv)
 
-        node.setPosition(0, 0, width, height)
-        val c = node.beginRecording(width, height)
+        // Квадрат слоя с диагональ экрана (+12%) — вращение не открывает углов.
+        nodeSize = ceil(hypot(width.toFloat(), height.toFloat()) * 1.12f).toInt()
+        nodeLeft = (width - nodeSize) / 2
+        nodeTop = (height - nodeSize) / 2
+        node.setPosition(nodeLeft, nodeTop, nodeLeft + nodeSize, nodeTop + nodeSize)
+
+        val c = node.beginRecording(nodeSize, nodeSize)
         try {
+            c.translate(-nodeLeft.toFloat(), -nodeTop.toFloat())
+            c.concat(camera) // камера вкатана в слой → на кадр остаётся дельта
             drawWheel(c, width.toFloat(), height.toFloat(), now, settings, bands, lod)
         } finally {
             node.endRecording()
@@ -399,17 +468,30 @@ class WheelView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         if (width <= 0 || height <= 0) return
-        val win = computeWindow()
-        if (rerecordNeeded(win)) recordScene(win)
 
-        canvas.save()
-        canvas.concat(camera)
-        if (canvas.isHardwareAccelerated && node.hasDisplayList()) {
-            canvas.drawRenderNode(node)
-        } else {
-            // Софт-фолбэк (скриншоты и т.п.) — рисуем напрямую, без LOD.
-            drawWheel(canvas, width.toFloat(), height.toFloat(), now, settings, bands)
+        // Дельта: camera · recCamera⁻¹ (что накрутили после записи слоя).
+        deltaM.setConcat(camera, recCamInv)
+
+        val win = computeWindow()
+        var rerecord = rerecordNeeded(win)
+        if (crispPending && !rerecord && deltaNontrivial()) rerecord = true
+        crispPending = false
+        if (rerecord) {
+            recordScene(win)
+            deltaM.setConcat(camera, recCamInv) // после записи дельта = identity
         }
-        canvas.restore()
+
+        if (canvas.isHardwareAccelerated && node.hasDisplayList()) {
+            canvas.save()
+            canvas.concat(deltaM)
+            canvas.drawRenderNode(node)
+            canvas.restore()
+        } else {
+            // Софт-фолбэк (скриншоты и т.п.).
+            canvas.save()
+            canvas.concat(camera)
+            drawWheel(canvas, width.toFloat(), height.toFloat(), now, settings, bands)
+            canvas.restore()
+        }
     }
 }

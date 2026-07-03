@@ -1,23 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Два сектора месяцев (куски пиццы, смотрят вверх) + стрелка «сейчас». -->
+<!-- Три сектора месяцев (45° суммарно), перевёрнуто: вершина сверху,
+     дуги внизу; золотая стрелка «сейчас» вниз посередине. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Левый сектор (чуть темнее — «чётный месяц») -->
+    <!-- Левый сектор -->
     <path
         android:fillColor="#26335C"
-        android:pathData="M54,72 L24.9,47.6 A38,38 0 0 1 51.3,34.1 Z"/>
+        android:pathData="M54,30 L37.14,72.8 A46,46 0 0 1 47.2,75.49 Z"/>
 
-    <!-- Правый сектор (чуть светлее — «нечётный месяц») -->
+    <!-- Средний сектор (светлее) -->
     <path
         android:fillColor="#3A4E85"
-        android:pathData="M54,72 L56.7,34.1 A38,38 0 0 1 83.1,47.6 Z"/>
+        android:pathData="M54,30 L48.79,75.7 A46,46 0 0 1 59.21,75.7 Z"/>
 
-    <!-- Стрелка «сейчас» между секторами, остриём вверх -->
+    <!-- Правый сектор -->
+    <path
+        android:fillColor="#26335C"
+        android:pathData="M54,30 L60.8,75.49 A46,46 0 0 1 70.86,72.8 Z"/>
+
+    <!-- Стрелка «сейчас» — вниз, остриё за дугами -->
     <path
         android:fillColor="#D4A853"
-        android:pathData="M53.2,72 L54.8,72 L54.8,30 L54,25.5 L53.2,30 Z"/>
+        android:pathData="M53.2,30 L54.8,30 L54.8,79.5 L54,84 L53.2,79.5 Z"/>
 </vector>

@@ -18,5 +18,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "circular-calendar-native"
+rootProject.name = "circular-calendar"
 include(":app")

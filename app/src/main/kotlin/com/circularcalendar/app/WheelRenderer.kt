@@ -252,11 +252,10 @@ fun drawWheel(
         val maxVisibleLayers =
             if (availableSpace > 0) (floor(availableSpace / (bandW + bandGap)) + 1).toInt() else 1
 
-        val bandPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeCap = Paint.Cap.BUTT // точная длина = длительность события (без «хвостов»)
-            strokeWidth = bandW
-        }
+        // Ленточка = «искривлённый squircle»: кольцевой сектор со скруглёнными
+        // углами. Длина строго равна длительности события.
+        val bandPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        val bandPath = Path()
 
         // Пиксель на единицу frac по окружности ленточной зоны (для LOD-отсева).
         val pxPerFrac = 2.0 * PI * eventBandBaseR * lod.camScale
@@ -283,15 +282,17 @@ fun drawWheel(
             val r = rRaw.coerceIn(minBandR, eventBandBaseR)
             val a0 = angleOf(b.startFrac)
             val a1 = angleOf(b.endFrac)
-            val sweep = a1 - a0
 
             val isPast = b.endFrac <= nowFrac
             val alpha = if (isPast) th.eventPastAlpha else th.eventFutureAlpha
             bandPaint.color = withAlpha(b.event.color, alpha)
-            val rect = RectF(cx - r, cy - r, cx + r, cy + r)
-            canvas.drawArc(rect, deg(a0), deg(sweep), false, bandPaint)
+            buildBandPath(bandPath, cx, cy, r, bandW / 2f, a0, a1)
+            canvas.drawPath(bandPath, bandPaint)
 
-            drawBandTitle(canvas, textPaint, b.event.title, cx, cy, r, bandW, a0, a1, b.event.color, alpha, lod.camScale)
+            drawBandTitle(
+                canvas, textPaint, b.event.title, cx, cy, r, bandW, a0, a1,
+                b.event.color, alpha, lod.camScale, settings.nowAtBottom,
+            )
         }
 
         // Overflow-маркеры «+N».
@@ -363,10 +364,55 @@ fun drawWheel(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Название события по дуге ленточки. Не вылезает за пределы события:
-// перенос до 2 строк, дальше многоточие. Появляется, когда дуга события
-// достаточно длинна на экране (сцена перезаписывается по зуму → названия
-// «проявляются» при приближении).
+// «Искривлённый squircle» — кольцевой сектор со скруглёнными углами.
+// Квадратичные кривые на углах дают мягкую, сквиркловую форму.
+// ─────────────────────────────────────────────────────────────────────────────
+
+private fun buildBandPath(
+    path: Path,
+    cx: Float,
+    cy: Float,
+    r: Float,
+    halfW: Float,
+    a0: Double,
+    a1: Double,
+) {
+    val ro = r + halfW
+    val ri = r - halfW
+    val sweep = a1 - a0
+    val sgn = if (sweep >= 0) 1.0 else -1.0
+    // Радиус скругления углов: до 70% полутолщины, но не больше половины дуги.
+    val cr = min(halfW * 0.7f, (abs(sweep) * r / 2f).toFloat())
+    val ca = (cr / r) * sgn // угловой отступ скругления (со знаком направления)
+
+    fun px(a: Double, rad: Float): Float = cx + (cos(a) * rad).toFloat()
+    fun py(a: Double, rad: Float): Float = cy + (sin(a) * rad).toFloat()
+
+    val ovalO = RectF(cx - ro, cy - ro, cx + ro, cy + ro)
+    val ovalI = RectF(cx - ri, cy - ri, cx + ri, cy + ri)
+
+    path.reset()
+    // Внешняя дуга (с отступами под углы).
+    path.arcTo(ovalO, deg(a0 + ca), deg((a1 - ca) - (a0 + ca)), true)
+    // Угол у конца события: наружу → радиальная кромка.
+    path.quadTo(px(a1, ro), py(a1, ro), px(a1, ro - cr), py(a1, ro - cr))
+    path.lineTo(px(a1, ri + cr), py(a1, ri + cr))
+    path.quadTo(px(a1, ri), py(a1, ri), px(a1 - ca, ri), py(a1 - ca, ri))
+    // Внутренняя дуга назад.
+    path.arcTo(ovalI, deg(a1 - ca), deg((a0 + ca) - (a1 - ca)), false)
+    // Угол у начала события.
+    path.quadTo(px(a0, ri), py(a0, ri), px(a0, ri + cr), py(a0, ri + cr))
+    path.lineTo(px(a0, ro - cr), py(a0, ro - cr))
+    path.quadTo(px(a0, ro), py(a0, ro), px(a0 + ca, ro), py(a0 + ca, ro))
+    path.close()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Название события — ПРЯМОЙ текст (не по дуге): горизонтален в покое, низом
+// к стрелке «сейчас» (при «сейчас вверху» переворачивается). Кегль подбирается
+// вниз, пока текст целиком (с переносами) не влезет в границы события —
+// без многоточий (кроме названий длиннее 200 символов). На мелких событиях
+// текст мал, но становится читаемым при зуме (сцена перезаписывается).
 // ─────────────────────────────────────────────────────────────────────────────
 
 private fun drawBandTitle(
@@ -382,97 +428,99 @@ private fun drawBandTitle(
     bandColor: Int,
     bandAlpha: Float,
     camScale: Float,
+    nowAtBottom: Boolean,
 ) {
     if (title.isBlank()) return
     val sweepAbs = abs(a1 - a0)
-    val arcLen = (sweepAbs * r).toFloat()          // content px
-    val arcLenScreen = arcLen * camScale
-    // Порог читаемости: меньше ~30px на экране текст не имеет смысла.
-    if (arcLenScreen < 30f || bandW * camScale < 5f) return
+    val arcLen = (sweepAbs * r).toFloat()
 
-    // Текст читается «головой к центру» (как тангенциальные подписи круга):
-    // путь должен идти в сторону УМЕНЬШЕНИЯ экранного угла.
-    val startAngle = max(a0, a1)
-    val sweepNeg = -sweepAbs
+    // Габариты «чанка» события: вдоль дуги (с пределом от кривизны) × по радиусу.
+    val wc = min(arcLen * 0.94f, 2f * kotlin.math.sqrt(2f * r * bandW * 0.35f))
+    val hc = bandW * 0.92f
+    if (wc <= 0f || hc <= 0f) return
+    // Порог появления на экране: слишком мелкий текст не пишем (появится по зуму).
+    if (wc * camScale < 9f) return
 
-    val rect = RectF(cx - r, cy - r, cx + r, cy + r)
-    val path = Path()
-    path.addArc(rect, deg(startAngle), deg(sweepNeg))
+    // Проекции осей чанка на горизонталь текста: угол касательной в середине.
+    val amid = (a0 + a1) / 2
+    val phi = amid + PI / 2
+    val pc = abs(cos(phi)).toFloat().coerceAtLeast(0.05f)
+    val ps = abs(sin(phi)).toFloat().coerceAtLeast(0.05f)
 
-    val pad = bandW * 0.45f
-    val avail = arcLen - 2f * pad
-    if (avail <= 0f) return
+    val text = if (title.length > 200) title.take(200).trimEnd() + "…" else title
 
-    // Цвет текста по яркости ленточки (ленточка полупрозрачна на тёмном фоне —
-    // почти всегда белый, но на ярких цветах нужен тёмный).
     val lum = 0.299f * ((bandColor shr 16) and 0xFF) +
         0.587f * ((bandColor shr 8) and 0xFF) +
         0.114f * (bandColor and 0xFF)
     val textColor = if (lum * bandAlpha > 165f) 0xD9000000.toInt() else 0xE8FFFFFF.toInt()
 
-    paint.textAlign = Paint.Align.LEFT
+    paint.textAlign = Paint.Align.CENTER
     paint.typeface = Typeface.DEFAULT
     paint.color = textColor
 
-    fun baselineOffset(): Float = -(paint.ascent() + paint.descent()) / 2f
+    // Подбор кегля: текст целиком (bbox строк) должен влезать в повёрнутый
+    // прямоугольник чанка — проверка через проекции bbox на оси чанка.
+    var fs = bandW * 0.5f
+    var lines: List<String>? = null
+    val lineH = 1.18f
+    while (fs >= bandW * 0.10f) {
+        paint.textSize = fs
+        var found: List<String>? = null
+        for (n in 1..3) {
+            val hT = n * fs * lineH
+            val wLimit = min((wc - hT * ps) / pc, (hc - hT * pc) / ps)
+            if (wLimit < fs * 0.8f) continue
+            val wrapped = wrapText(text, paint, wLimit, n)
+            if (wrapped != null) {
+                found = wrapped; break
+            }
+        }
+        if (found != null) {
+            lines = found; break
+        }
+        fs *= 0.82f
+    }
+    val ls = lines ?: return
+    if (fs * camScale < 2.5f) return // подпиксельный текст — только шум
 
-    // 1) Пытаемся уложить в одну строку.
-    val fs1 = bandW * 0.52f
-    paint.textSize = fs1
-    val w1 = paint.measureText(title)
-    if (w1 <= avail) {
-        canvas.drawTextOnPath(title, path, pad + (avail - w1) / 2f, baselineOffset(), paint)
-        paint.textAlign = Paint.Align.CENTER
-        return
-    }
+    paint.textSize = fs
+    val mx = cx + (cos(amid) * r).toFloat()
+    val my = cy + (sin(amid) * r).toFloat()
 
-    // 2) Две строки с переносом по словам; хвост — многоточие.
-    val fs2 = bandW * 0.40f
-    paint.textSize = fs2
-    val lines = wrapToTwoLines(title, paint, avail)
-    if (lines.isEmpty()) {
-        paint.textAlign = Paint.Align.CENTER
-        return
+    canvas.save()
+    canvas.translate(mx, my)
+    // Низ текста — к стрелке «сейчас»: при «сейчас вверху» переворачиваем.
+    if (!nowAtBottom) canvas.rotate(180f)
+    val base = -(paint.ascent() + paint.descent()) / 2f
+    val n = ls.size
+    ls.forEachIndexed { i, line ->
+        val y = (i - (n - 1) / 2f) * fs * lineH + base
+        canvas.drawText(line, 0f, y, paint)
     }
-    val lineShift = bandW * 0.23f
-    lines.forEachIndexed { i, line ->
-        val lw = paint.measureText(line)
-        val v = (if (lines.size == 1) 0f else if (i == 0) -lineShift else lineShift) + baselineOffset()
-        canvas.drawTextOnPath(line, path, pad + (avail - lw) / 2f, v, paint)
-    }
-    paint.textAlign = Paint.Align.CENTER
+    canvas.restore()
 }
 
-/** Перенос по словам максимум в 2 строки; не влезло — многоточие. */
-private fun wrapToTwoLines(text: String, paint: Paint, maxW: Float): List<String> {
-    if (maxW < paint.textSize) return emptyList()
-
-    fun truncate(s: String): String {
-        if (paint.measureText(s) <= maxW) return s
-        val ell = "…"
-        var n = paint.breakText(s, true, maxW - paint.measureText(ell), null)
-        if (n <= 0) return ""
-        return s.substring(0, n).trimEnd() + ell
-    }
-
+/**
+ * Перенос по словам в НЕ БОЛЕЕ [maxLines] строк ширины [maxW].
+ * null = не влезает (нужен кегль меньше). Слишком длинное слово тоже = null.
+ */
+private fun wrapText(text: String, paint: Paint, maxW: Float, maxLines: Int): List<String>? {
     val words = text.split(' ').filter { it.isNotEmpty() }
-    if (words.isEmpty()) return emptyList()
-
-    val line1 = StringBuilder()
-    var idx = 0
-    while (idx < words.size) {
-        val cand = if (line1.isEmpty()) words[idx] else "${line1} ${words[idx]}"
+    if (words.isEmpty()) return null
+    val lines = ArrayList<String>(maxLines)
+    var cur = StringBuilder()
+    for (w in words) {
+        val cand = if (cur.isEmpty()) w else "$cur $w"
         if (paint.measureText(cand) <= maxW) {
-            line1.setLength(0); line1.append(cand); idx++
-        } else break
+            cur.setLength(0); cur.append(cand)
+        } else {
+            if (cur.isEmpty()) return null // слово шире строки
+            lines.add(cur.toString())
+            if (lines.size >= maxLines) return null
+            cur = StringBuilder(w)
+            if (paint.measureText(w) > maxW) return null
+        }
     }
-    if (line1.isEmpty()) {
-        // Первое слово длиннее строки — жёсткое усечение.
-        return listOf(truncate(words[0])).filter { it.isNotEmpty() }
-    }
-    if (idx >= words.size) return listOf(line1.toString())
-
-    val rest = words.subList(idx, words.size).joinToString(" ")
-    val line2 = truncate(rest)
-    return if (line2.isEmpty()) listOf(line1.toString()) else listOf(line1.toString(), line2)
+    if (cur.isNotEmpty()) lines.add(cur.toString())
+    return if (lines.size <= maxLines) lines else null
 }

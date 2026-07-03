@@ -75,7 +75,13 @@ class EventBand(
     var layer: Int = 0,
 )
 
-fun buildEventBands(events: List<CalendarEvent>, year: Int): List<EventBand> {
+/**
+ * Строит ленточки с правилом окна ±6 месяцев от «сейчас»: каждый угловой слот
+ * показывает вхождение, ближайшее по времени. В середине года прошлое видно
+ * приглушённым; при подходе к концу года дальнее прошлое замещается событиями
+ * следующего года (перекат, SPEC §5) — БЕЗ наложения двух копий на одном угле.
+ */
+fun buildEventBands(events: List<CalendarEvent>, year: Int, nowFrac: Double): List<EventBand> {
     val yearStart = LocalDateTime.of(year, 1, 1, 0, 0)
     val nextYearStart = LocalDateTime.of(year + 1, 1, 1, 0, 0)
     val nextYearEnd = LocalDateTime.of(year + 2, 1, 1, 0, 0)
@@ -90,17 +96,17 @@ fun buildEventBands(events: List<CalendarEvent>, year: Int): List<EventBand> {
 
     val bands = ArrayList<EventBand>()
     for (e in events) {
-        // Копия текущего года.
+        // Копия текущего года — если событие закончилось не дальше 6 мес. назад.
         if (e.start.year == year || (e.start.year < year && e.end.isAfter(yearStart))) {
             val s = frac(e.start).coerceIn(0.0, 1.0)
             val en = frac(e.end).coerceIn(0.0, 1.0)
-            if (en - s > 1e-9) bands.add(EventBand(e, s, en))
+            if (en - s > 1e-9 && en > nowFrac - 0.5) bands.add(EventBand(e, s, en))
         }
-        // Копия следующего года (перекат): события след. года и кросс-годовые.
+        // Копия следующего года (перекат) — если начало не дальше 6 мес. вперёд.
         if (e.start.year == year + 1 || (e.start.year == year && e.end.isAfter(nextYearStart))) {
             val s = (1.0 + fracNext(e.start)).coerceIn(1.0, 2.0)
             val en = (1.0 + fracNext(e.end)).coerceIn(1.0, 2.0)
-            if (en - s > 1e-9) bands.add(EventBand(e, s, en))
+            if (en - s > 1e-9 && s < nowFrac + 0.5) bands.add(EventBand(e, s, en))
         }
     }
 
