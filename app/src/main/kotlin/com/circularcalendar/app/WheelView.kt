@@ -3,13 +3,15 @@ package com.circularcalendar.app
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Matrix
-import android.graphics.Picture
+import android.graphics.RenderNode
 import android.view.Choreographer
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
+import java.time.Duration
 import java.time.LocalDateTime
 import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.exp
 import kotlin.math.hypot
 import kotlin.math.max
@@ -18,41 +20,47 @@ import kotlin.math.min
 // ─────────────────────────────────────────────────────────────────────────────
 // WheelView — сцена + камера + жесты.
 //
-// Паттерн рендера (тот же инвариант, что во Flutter-версии):
-// статичная сцена рисуется ОДИН РАЗ в Picture; на кадр —
-// только canvas.concat(camera) + drawPicture. Никакой тяжёлой работы в onDraw.
+// Рендер: сцена пишется в RenderNode (display list кэшируется на GPU);
+// на кадр — только canvas.concat(camera) + drawRenderNode. Пере-запись сцены —
+// ТОЛЬКО когда LOD-окно устарело: зум ушёл за порог ×1.35 или видимый сектор
+// вышел за записанное (с запасом) окно. Внутри записи рендерер отсекает
+// события мельче полпикселя и всё вне видимого сектора — поэтому даже тысячи
+// экземпляров событий не гробят кадр.
 //
-// Жесты — порт из main.dart:
-//  * один палец: осевой замок (тангенциальный свайп → вращение на месте,
-//    радиальный → панорама; гистерезис 1.4, порог 10dp);
-//  * один палец в «пустом центре» → чистая панорама;
-//  * два пальца: панорама + пинч-зум к фокусу, без вращения;
-//  * бросок → инерция вращения с трением exp(-2.2·dt);
-//  * двойной тап → сброс камеры.
+// Жесты — порт из Flutter-версии: осевой замок (порог 10dp, гистерезис 1.4),
+// центр = панорама, два пальца = пан+пинч, инерция exp(-2.2·dt), даблтап = сброс.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class WheelView(context: Context) : View(context) {
 
-    private var picture: Picture? = null
     private val camera = Matrix()
+    private val node = RenderNode("wheel")
 
     private var settings = WheelSettings()
-    private var events: List<CalendarEvent> = emptyList()
+    private var bands: List<EventBand> = emptyList()
     private var now: LocalDateTime = LocalDateTime.now()
+
+    // Параметры последней записи сцены.
+    private var sceneDirty = true
+    private var recScale = 1f
+    private var recFull = true
+    private var recWinStart = 0.0
+    private var recWinLen = 1.0
 
     // ── Камера ────────────────────────────────────────────────────────────────
 
-    private val tmpPts = FloatArray(2)
+    private val tmpPts = FloatArray(8)
+    private val invCamera = Matrix()
 
     private fun wheelCenterX(): Float {
         tmpPts[0] = width / 2f; tmpPts[1] = height / 2f
-        camera.mapPoints(tmpPts)
+        camera.mapPoints(tmpPts, 0, tmpPts, 0, 1)
         return tmpPts[0]
     }
 
     private fun wheelCenterY(): Float {
         tmpPts[0] = width / 2f; tmpPts[1] = height / 2f
-        camera.mapPoints(tmpPts)
+        camera.mapPoints(tmpPts, 0, tmpPts, 0, 1)
         return tmpPts[1]
     }
 
@@ -84,8 +92,7 @@ class WheelView(context: Context) : View(context) {
     private val lockThreshold = 10.0f * density
     private val lockHysteresis = 1.4f
 
-    // 0 = не решено, 1 = вращение, 2 = панорама/мультитач
-    private var gestureMode = 0
+    private var gestureMode = 0 // 0 = не решено, 1 = вращение, 2 = панорама
     private var accumTan = 0f
     private var accumRad = 0f
 
@@ -93,7 +100,7 @@ class WheelView(context: Context) : View(context) {
     private var lastFocalY = 0f
     private var lastSpan = 0f
 
-    private var angVel = 0.0        // рад/с
+    private var angVel = 0.0
     private var velTimeMs = 0L
     private var inertiaRunning = false
     private var lastFrameNanos = 0L
@@ -148,7 +155,6 @@ class WheelView(context: Context) : View(context) {
         invalidate()
     }
 
-    // Средняя точка всех активных пальцев (кроме исключаемого index).
     private fun focalOf(e: MotionEvent, excludeIndex: Int = -1): Pair<Float, Float> {
         var sx = 0f; var sy = 0f; var n = 0
         for (i in 0 until e.pointerCount) {
@@ -158,7 +164,6 @@ class WheelView(context: Context) : View(context) {
         return if (n > 0) Pair(sx / n, sy / n) else Pair(0f, 0f)
     }
 
-    // Расстояние между первыми двумя пальцами (для пинч-зума).
     private fun spanOf(e: MotionEvent, excludeIndex: Int = -1): Float {
         val idx = ArrayList<Int>(e.pointerCount)
         for (i in 0 until e.pointerCount) if (i != excludeIndex) idx.add(i)
@@ -195,7 +200,6 @@ class WheelView(context: Context) : View(context) {
 
             MotionEvent.ACTION_MOVE -> {
                 if (e.pointerCount >= 2) {
-                    // Два пальца: панорама + пинч-зум, без вращения.
                     val (fx, fy) = focalOf(e)
                     panBy(fx - lastFocalX, fy - lastFocalY)
                     val span = spanOf(e)
@@ -213,8 +217,6 @@ class WheelView(context: Context) : View(context) {
 
                 val cxW = wheelCenterX()
                 val cyW = wheelCenterY()
-                // Раскладка вектора движения на радиальную и тангенциальную
-                // составляющие относительно ПРЕДЫДУЩЕЙ точки (как во Flutter).
                 val prevX = lastFocalX
                 val prevY = lastFocalY
                 val rvx = prevX - cxW
@@ -247,7 +249,6 @@ class WheelView(context: Context) : View(context) {
                     return true
                 }
 
-                // Вращение на месте: угол из тангенциального смещения.
                 val rot = (dTan / r).toDouble()
                 val t = e.eventTime
                 val dt = ((t - velTimeMs) / 1000.0).coerceIn(0.008, 0.1)
@@ -257,7 +258,6 @@ class WheelView(context: Context) : View(context) {
             }
 
             MotionEvent.ACTION_POINTER_UP -> {
-                // Перезаякорить фокус без поднимающегося пальца.
                 val (fx, fy) = focalOf(e, e.actionIndex)
                 lastFocalX = fx; lastFocalY = fy
                 lastSpan = spanOf(e, e.actionIndex)
@@ -274,36 +274,142 @@ class WheelView(context: Context) : View(context) {
         return true
     }
 
-    // ── Сцена ─────────────────────────────────────────────────────────────────
+    // ── Сцена и LOD ───────────────────────────────────────────────────────────
 
     fun update(settings: WheelSettings, events: List<CalendarEvent>, now: LocalDateTime) {
         this.settings = settings
-        this.events = events
         this.now = now
+        val filtered = events.filter { settings.calendarFilter.allows(it) }
+        // Укладка по слоям — одна на смену данных (стабильные кольца при зуме).
+        this.bands = buildEventBands(filtered, now.year)
         setBackgroundColor(settings.theme.background)
-        rebuildPicture()
+        sceneDirty = true
         invalidate()
     }
 
-    private fun rebuildPicture() {
-        if (width <= 0 || height <= 0) return
-        val pic = Picture()
-        val c = pic.beginRecording(width, height)
-        val filtered = events.filter { settings.calendarFilter.allows(it) }
-        drawWheel(c, width.toFloat(), height.toFloat(), now, settings, filtered)
-        pic.endRecording()
-        picture = pic
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        sceneDirty = true
     }
 
-    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-        rebuildPicture()
+    /**
+     * Видимое окно в frac-пространстве: [start, len] или null = весь круг.
+     * Углы экрана переводятся в контент-пространство; если центр круга на
+     * экране — видно всё; иначе угловой диапазон = углы 4 углов экрана
+     * (экстремумы atan2 по выпуклому четырёхугольнику — в вершинах).
+     */
+    private fun computeWindow(): DoubleArray? {
+        if (currentScale() <= 1.05f) return null
+        if (!camera.invert(invCamera)) return null
+
+        val w = width.toFloat(); val h = height.toFloat()
+        tmpPts[0] = 0f; tmpPts[1] = 0f
+        tmpPts[2] = w; tmpPts[3] = 0f
+        tmpPts[4] = w; tmpPts[5] = h
+        tmpPts[6] = 0f; tmpPts[7] = h
+        invCamera.mapPoints(tmpPts)
+
+        val cx = w / 2f; val cy = h / 2f
+
+        // Центр внутри выпуклого четырёхугольника? (знаки векторных произведений)
+        var pos = false; var neg = false
+        for (i in 0 until 4) {
+            val x1 = tmpPts[i * 2]; val y1 = tmpPts[i * 2 + 1]
+            val x2 = tmpPts[((i + 1) % 4) * 2]; val y2 = tmpPts[((i + 1) % 4) * 2 + 1]
+            val cross = (x2 - x1) * (cy - y1) - (y2 - y1) * (cx - x1)
+            if (cross > 0) pos = true else if (cross < 0) neg = true
+        }
+        if (!(pos && neg)) return null // центр виден → весь круг
+
+        // Углы вершин, развёрнутые вокруг первого.
+        val a0 = atan2((tmpPts[1] - cy).toDouble(), (tmpPts[0] - cx).toDouble())
+        var aMin = a0; var aMax = a0
+        for (i in 1 until 4) {
+            var a = atan2((tmpPts[i * 2 + 1] - cy).toDouble(), (tmpPts[i * 2] - cx).toDouble())
+            while (a - a0 > Math.PI) a -= 2 * Math.PI
+            while (a - a0 < -Math.PI) a += 2 * Math.PI
+            aMin = min(aMin, a); aMax = max(aMax, a)
+        }
+
+        // Угол → frac (инверсия angleOf из рендерера).
+        val year = now.year
+        val yearStart = LocalDateTime.of(year, 1, 1, 0, 0)
+        val totalSec = Duration.between(yearStart, LocalDateTime.of(year + 1, 1, 1, 0, 0))
+            .seconds.toDouble()
+        val nowFrac = Duration.between(yearStart, now).seconds.toDouble() / totalSec
+        val dir = if (settings.counterClockwise) 1.0 else -1.0
+        val anchorA = if (settings.nowAtBottom) Math.PI / 2 else -Math.PI / 2
+        val f1 = nowFrac + dir * (anchorA - aMin) / (2 * Math.PI)
+        val f2 = nowFrac + dir * (anchorA - aMax) / (2 * Math.PI)
+        var start = min(f1, f2)
+        val len = abs(f1 - f2)
+        if (len >= 0.999) return null
+        start -= Math.floor(start) // нормализация в [0,1)
+        return doubleArrayOf(start, len)
+    }
+
+    private fun rerecordNeeded(win: DoubleArray?): Boolean {
+        if (sceneDirty) return true
+        val ratio = currentScale() / recScale
+        if (ratio > 1.35f || ratio < 0.74f) return true
+        if (recFull) return false
+        if (win == null) return true
+        // Текущее окно должно лежать внутри записанного (mod 1).
+        for (k in -1..1) {
+            val s = win[0] + k
+            if (s >= recWinStart - 1e-9 && s + win[1] <= recWinStart + recWinLen + 1e-9) return false
+        }
+        return true
+    }
+
+    private fun recordScene(win: DoubleArray?) {
+        if (width <= 0 || height <= 0) return
+        val scale = currentScale()
+        // Запас 35% длины окна с каждой стороны — панорама не требует
+        // перезаписи каждый кадр.
+        val lod: Lod
+        if (win == null) {
+            lod = Lod(camScale = scale)
+            recFull = true
+        } else {
+            val padded = win[1] * 0.35
+            val start = win[0] - padded
+            val len = win[1] + 2 * padded
+            if (len >= 0.999) {
+                lod = Lod(camScale = scale)
+                recFull = true
+            } else {
+                val startN = start - Math.floor(start)
+                lod = Lod(camScale = scale, winStart = startN, winLen = len, full = false)
+                recFull = false
+                recWinStart = startN
+                recWinLen = len
+            }
+        }
+        recScale = scale
+
+        node.setPosition(0, 0, width, height)
+        val c = node.beginRecording(width, height)
+        try {
+            drawWheel(c, width.toFloat(), height.toFloat(), now, settings, bands, lod)
+        } finally {
+            node.endRecording()
+        }
+        sceneDirty = false
     }
 
     override fun onDraw(canvas: Canvas) {
-        val pic = picture ?: return
+        if (width <= 0 || height <= 0) return
+        val win = computeWindow()
+        if (rerecordNeeded(win)) recordScene(win)
+
         canvas.save()
         canvas.concat(camera)
-        canvas.drawPicture(pic)
+        if (canvas.isHardwareAccelerated && node.hasDisplayList()) {
+            canvas.drawRenderNode(node)
+        } else {
+            // Софт-фолбэк (скриншоты и т.п.) — рисуем напрямую, без LOD.
+            drawWheel(canvas, width.toFloat(), height.toFloat(), now, settings, bands)
+        }
         canvas.restore()
     }
 }

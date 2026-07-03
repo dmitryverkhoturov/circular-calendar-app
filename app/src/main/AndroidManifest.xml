@@ -3,7 +3,7 @@
     <uses-permission android:name="android.permission.READ_CALENDAR"/>
 
     <application
-        android:label="Круговой натив"
+        android:label="Круговой календарь"
         android:icon="@mipmap/ic_launcher"
         android:theme="@style/AppTheme"
         android:hardwareAccelerated="true"

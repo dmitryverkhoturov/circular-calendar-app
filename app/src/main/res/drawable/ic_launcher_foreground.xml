@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Два сектора месяцев (куски пиццы, смотрят вверх) + стрелка «сейчас». -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Левый сектор (чуть темнее — «чётный месяц») -->
+    <path
+        android:fillColor="#26335C"
+        android:pathData="M54,72 L24.9,47.6 A38,38 0 0 1 51.3,34.1 Z"/>
+
+    <!-- Правый сектор (чуть светлее — «нечётный месяц») -->
+    <path
+        android:fillColor="#3A4E85"
+        android:pathData="M54,72 L56.7,34.1 A38,38 0 0 1 83.1,47.6 Z"/>
+
+    <!-- Стрелка «сейчас» между секторами, остриём вверх -->
+    <path
+        android:fillColor="#D4A853"
+        android:pathData="M53.2,72 L54.8,72 L54.8,30 L54,25.5 L53.2,30 Z"/>
+</vector>
