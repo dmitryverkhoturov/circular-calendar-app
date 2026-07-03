@@ -14,6 +14,7 @@ import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.pow
 import kotlin.math.sin
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -296,9 +297,9 @@ fun drawWheel(
 
             drawBandTitle(
                 canvas, textPaint, b.event.title, cx, cy, r, bandW, a0, a1,
-                b.event.color, alpha, lod.camScale, settings.nowAtBottom,
+                b.event.color, alpha, settings.nowAtBottom,
                 isDayPlus = sweepFrac >= 1.0 / 366.0,
-                nowAngle = angleOf(nowFrac),
+                ccw = settings.counterClockwise,
             )
         }
 
@@ -345,19 +346,22 @@ fun drawWheel(
     // постоянна), чтобы не заслонять маленькие события (§2 SPEC).
     val accent = th.accent
     val nowAngle = angleOf(nowFrac)
+    // Мягкое утоньшение: экранная толщина растёт как zoom^0.3 (с потолком ×4),
+    // т.е. относительно контента стрелка тоньше, но остаётся хорошо видимой.
     val zoomDiv = max(1f, lod.camScale)
+    val zk = min(zoomDiv.pow(0.3f), 4f) / zoomDiv
     val tipR = outerR + 14f * unit
     val tipX = cx + (cos(nowAngle) * tipR).toFloat()
     val tipY = cy + (sin(nowAngle) * tipR).toFloat()
 
     canvas.drawLine(cx, cy, tipX, tipY, Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = accent
-        strokeWidth = 1.2f * unit / zoomDiv
+        strokeWidth = 1.5f * unit * zk
         strokeCap = Paint.Cap.ROUND
     })
 
     run {
-        val size = 3.8f * unit / zoomDiv
+        val size = 3.8f * unit * zk
         val ca = cos(nowAngle).toFloat()
         val sa = sin(nowAngle).toFloat()
         val path = Path()
@@ -369,8 +373,8 @@ fun drawWheel(
         canvas.drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accent })
     }
 
-    canvas.drawCircle(cx, cy, 2.0f * unit / zoomDiv, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accent })
-    canvas.drawCircle(cx, cy, 5.0f * unit / zoomDiv, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    canvas.drawCircle(cx, cy, 2.0f * unit * zk, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accent })
+    canvas.drawCircle(cx, cy, 5.0f * unit * zk, Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = withAlpha(accent, 0.12f)
     })
 }
@@ -443,10 +447,9 @@ private fun drawBandTitle(
     a1: Double,
     bandColor: Int,
     bandAlpha: Float,
-    camScale: Float,
     nowAtBottom: Boolean,
     isDayPlus: Boolean,
-    nowAngle: Double,
+    ccw: Boolean,
 ) {
     if (title.isBlank()) return
     val text = if (title.length > 200) title.take(200).trimEnd() + "…" else title
@@ -458,14 +461,14 @@ private fun drawBandTitle(
     paint.typeface = Typeface.DEFAULT
 
     if (isDayPlus) {
-        drawArcTitle(canvas, paint, text, cx, cy, r, bandW, a0, a1, camScale, nowAtBottom)
+        drawArcTitle(canvas, paint, text, cx, cy, r, bandW, a0, a1, nowAtBottom)
     } else {
-        drawRadialTitle(canvas, paint, text, cx, cy, r, bandW, a0, a1, camScale, nowAngle)
+        drawRadialTitle(canvas, paint, text, cx, cy, r, bandW, a0, a1, ccw)
     }
     paint.textAlign = Paint.Align.CENTER
 }
 
-/** Текст по дуге для событий от одного дня. */
+/** Текст по дуге для событий от одного дня. Рисуется ВСЕГДА (кегль ужимается). */
 private fun drawArcTitle(
     canvas: Canvas,
     paint: Paint,
@@ -476,12 +479,13 @@ private fun drawArcTitle(
     bandW: Float,
     a0: Double,
     a1: Double,
-    camScale: Float,
     nowAtBottom: Boolean,
 ) {
     val sweepAbs = abs(a1 - a0)
     val arcLen = (sweepAbs * r).toFloat()
-    val avail = arcLen - bandW * 0.8f
+    // Отступ пропорционален дуге (НЕ толщине ленты) — иначе на ~однодневных
+    // событиях доступная ширина уходила в минус и текст пропадал.
+    val avail = arcLen * 0.90f
     if (avail <= 0f) return
 
     // Направление пути: при «сейчас внизу» — по убыванию экранного угла
@@ -496,40 +500,35 @@ private fun drawArcTitle(
 
     paint.textAlign = Paint.Align.LEFT
 
-    // Дефолтный кегль; уменьшаем, только если не влезает.
+    // Дефолтный кегль; уменьшаем, пока не влезет целиком (без многоточий).
     var fs = bandW * 0.52f
     var lines: List<String>? = null
-    while (fs >= bandW * 0.12f) {
+    while (fs >= bandW * 0.02f) {
         paint.textSize = fs
-        val maxLines = min(3, (bandW * 0.92f / (fs * 1.15f)).toInt().coerceAtLeast(1))
+        val maxLines = min(8, (bandW * 0.92f / (fs * 1.15f)).toInt().coerceAtLeast(1))
         val wrapped = wrapText(text, paint, avail, maxLines)
         if (wrapped != null) {
             lines = wrapped; break
         }
         fs *= 0.84f
     }
-    if (lines == null) {
-        // Безвыходный случай: одна строка с жёстким усечением на минимальном кегле.
-        fs = bandW * 0.30f
-        paint.textSize = fs
-        val ell = "…"
-        val n = paint.breakText(text, true, avail - paint.measureText(ell), null)
-        if (n <= 0) return
-        lines = listOf(text.substring(0, n).trimEnd() + ell)
-    }
-    if (fs * camScale < 2.5f) return // подпиксельный текст — шум, проявится зумом
+    val ls = lines ?: return
 
     paint.textSize = fs
     val base = -(paint.ascent() + paint.descent()) / 2f
-    val n = lines.size
-    lines.forEachIndexed { i, line ->
+    val n = ls.size
+    ls.forEachIndexed { i, line ->
         val lw = paint.measureText(line)
         val v = (i - (n - 1) / 2f) * fs * 1.15f + base
         canvas.drawTextOnPath(line, path, (arcLen - lw) / 2f, v, paint)
     }
 }
 
-/** Текст вдоль радиуса (90°) для событий короче дня. */
+/**
+ * Текст вдоль радиуса (90°) для событий короче дня. Рисуется всегда.
+ * Ориентация ЕДИНАЯ для прошлого и будущего: низ глифов — назад по времени
+ * (у будущих событий это в сторону стрелки «сейчас»); зависит от CCW/CW.
+ */
 private fun drawRadialTitle(
     canvas: Canvas,
     paint: Paint,
@@ -540,8 +539,7 @@ private fun drawRadialTitle(
     bandW: Float,
     a0: Double,
     a1: Double,
-    camScale: Float,
-    nowAngle: Double,
+    ccw: Boolean,
 ) {
     val amid = (a0 + a1) / 2
     val angW = (abs(a1 - a0) * r).toFloat() // угловая (узкая) ширина чанка
@@ -552,9 +550,9 @@ private fun drawRadialTitle(
     // Кегль: дефолт для узких, ограничен угловой шириной чанка.
     var fs = min(bandW * 0.30f, angW / 1.25f)
     var lines: List<String>? = null
-    while (fs >= bandW * 0.04f) {
+    while (fs >= bandW * 0.01f) {
         paint.textSize = fs
-        val maxLines = min(3, (angW / (fs * 1.25f)).toInt().coerceAtLeast(1))
+        val maxLines = min(8, (angW / (fs * 1.25f)).toInt().coerceAtLeast(1))
         val wrapped = wrapText(text, paint, maxLen, maxLines)
         if (wrapped != null) {
             lines = wrapped; break
@@ -562,18 +560,13 @@ private fun drawRadialTitle(
         fs *= 0.84f
     }
     val ls = lines ?: return
-    if (fs * camScale < 2.5f) return
 
     paint.textSize = fs
 
-    // Низ текста (перпендикуляр) — в сторону стрелки «сейчас» вдоль круга.
-    var delta = nowAngle - amid
-    while (delta > PI) delta -= 2 * PI
-    while (delta < -PI) delta += 2 * PI
-    val sgn = if (delta >= 0) 1.0 else -1.0
-    // Тангенциальное направление «к сейчас».
-    val dx = -sin(amid) * sgn
-    val dy = cos(amid) * sgn
+    // Низ глифов — назад по времени (единая ориентация для всех событий).
+    val dirSign = if (ccw) 1.0 else -1.0
+    val dx = -sin(amid) * dirSign
+    val dy = cos(amid) * dirSign
     // Базовая линия = поворот d на -90° (тогда «низ» глифов совпадает с d).
     val ux = dy
     val uy = -dx

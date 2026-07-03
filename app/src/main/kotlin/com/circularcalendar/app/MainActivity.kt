@@ -24,6 +24,7 @@ import java.time.LocalDateTime
 class MainActivity : Activity() {
 
     private lateinit var root: FrameLayout
+    private lateinit var overlay: FrameLayout
     private lateinit var wheel: WheelView
     private lateinit var settingsButton: TextView
     private var panel: View? = null
@@ -93,12 +94,46 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         loadSettings()
 
+        // Edge-to-edge: рисуем под полностью прозрачными системными барами.
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            window.setDecorFitsSystemWindows(false)
+        } else {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility =
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+        }
+        window.statusBarColor = 0
+        window.navigationBarColor = 0
+        window.isNavigationBarContrastEnforced = false
+        window.isStatusBarContrastEnforced = false
+
         root = FrameLayout(this)
-        root.fitsSystemWindows = true
 
         wheel = WheelView(this)
         root.addView(wheel, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+
+        // Оверлей (кнопка настроек, панель) — с отступами от системных баров.
+        overlay = FrameLayout(this)
+        root.addView(overlay, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        root.setOnApplyWindowInsetsListener { _, insets ->
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                val si = insets.getInsets(android.view.WindowInsets.Type.systemBars())
+                overlay.setPadding(si.left, si.top, si.right, si.bottom)
+            } else {
+                @Suppress("DEPRECATION")
+                overlay.setPadding(
+                    insets.systemWindowInsetLeft,
+                    insets.systemWindowInsetTop,
+                    insets.systemWindowInsetRight,
+                    insets.systemWindowInsetBottom,
+                )
+            }
+            insets
+        }
 
         // Маленькая, почти незаметная кнопка настроек — внизу слева (§3b SPEC).
         settingsButton = TextView(this).apply {
@@ -110,7 +145,7 @@ class MainActivity : Activity() {
             background = roundedBg(withAlpha(WHITE, 0.06f), 8f)
             setOnClickListener { togglePanel() }
         }
-        root.addView(settingsButton, FrameLayout.LayoutParams(dp(32f), dp(32f)).apply {
+        overlay.addView(settingsButton, FrameLayout.LayoutParams(dp(32f), dp(32f)).apply {
             gravity = Gravity.BOTTOM or Gravity.START
             leftMargin = dp(12f); bottomMargin = dp(12f)
         })
@@ -187,13 +222,13 @@ class MainActivity : Activity() {
 
     private fun togglePanel() {
         if (panel != null) {
-            root.removeView(panel)
+            overlay.removeView(panel)
             panel = null
             settingsButton.alpha = 0.28f
         } else {
             val v = buildPanel()
             panel = v
-            root.addView(v, FrameLayout.LayoutParams(
+            overlay.addView(v, FrameLayout.LayoutParams(
                 dp(240f), FrameLayout.LayoutParams.WRAP_CONTENT).apply {
                 gravity = Gravity.BOTTOM or Gravity.START
                 leftMargin = dp(8f); bottomMargin = dp(52f)
@@ -204,7 +239,7 @@ class MainActivity : Activity() {
 
     private fun rebuildPanelIfOpen() {
         if (panel != null) {
-            root.removeView(panel)
+            overlay.removeView(panel)
             panel = null
             togglePanel()
         }
