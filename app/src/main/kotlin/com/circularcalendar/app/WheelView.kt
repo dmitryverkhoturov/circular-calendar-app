@@ -95,7 +95,7 @@ class WheelView(context: Context) : View(context) {
 
     private fun zoomBy(fx: Float, fy: Float, s: Float) {
         val cur = currentScale()
-        val es = (cur * s).coerceIn(0.4f, 40.0f) / cur
+        val es = (cur * s).coerceIn(0.4f, 400.0f) / cur
         camera.postScale(es, es, fx, fy)
         invalidate()
     }
