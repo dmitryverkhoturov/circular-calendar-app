@@ -350,8 +350,8 @@ class MainActivity : Activity() {
 
         col.addView(label("Крупные события"))
         space(6f)
-        // «Снизу» — у кольца дней (как раньше); «Сверху» — дальше от кольца,
-        // а нижнюю полосу делят между собой короткие (< дня) события.
+        // «Снизу» — крупные у кольца дней (как раньше); «Сверху» — иерархия
+        // длительности: из пересекающихся длинное уходит дальше от кольца.
         col.addView(toggle(listOf("Снизу", "Сверху"),
             if (settings.largeEventsOnTop) 1 else 0) { i ->
             applySettings(settings.copy(largeEventsOnTop = i == 1))

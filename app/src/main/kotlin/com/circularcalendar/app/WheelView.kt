@@ -31,10 +31,11 @@ import kotlin.math.min
 // квадрат слоя, и в покое (для идеальной чёткости).
 //
 // Жесты — порт из Flutter-версии: осевой замок (порог 10dp, гистерезис 1.4),
-// центр = панорама, два пальца = пан+пинч, инерция exp(-2.2·dt), даблтап = сброс.
-// На малом масштабе (круг целиком на экране, зум ≤ 1.05) осевой замок не нужен:
-// один палец вне центра всегда крутит — панорама там остаётся за центром
-// и двумя пальцами. Инерция есть и у вращения, и у панорамы.
+// центр = панорама, два пальца = пан+пинч, даблтап = сброс.
+// Инерция — у вращения, панорамы и зума, затухание exp(-4.4·dt).
+// Пороги инерции вращения — в ЭКРАННЫХ px/s (|angVel|·r точки хвата):
+// на сильном зуме угловая скорость микроскопическая, и пороги в рад/с
+// убивали инерцию (баг v0.5 «на масштабе часов не крутится с инерцией»).
 // ─────────────────────────────────────────────────────────────────────────────
 
 class WheelView(context: Context) : View(context) {
@@ -120,9 +121,18 @@ class WheelView(context: Context) : View(context) {
     private var angVel = 0.0
     private var panVx = 0.0
     private var panVy = 0.0
+    private var zoomVel = 0.0 // ln(scale)/s — инерция пинча
+    private var lastRotR = 300f // радиус точки хвата при вращении (для px-порогов)
+    private var lastPinchMs = 0L
+    private var zoomFx = 0f // фокус зума для инерции
+    private var zoomFy = 0f
     private var velTimeMs = 0L
     private var inertiaRunning = false
     private var lastFrameNanos = 0L
+
+    // Затухание всех инерций и стартовый импульс (доля скорости броска).
+    private val friction = 4.4
+    private val launch = 0.52
 
     // Камера, сохранённая перед прошлым закрытием: применяется в onSizeChanged,
     // только если размер вью совпал (иначе матрица не имеет смысла).
@@ -158,18 +168,25 @@ class WheelView(context: Context) : View(context) {
             val dt = (frameTimeNanos - lastFrameNanos) / 1e9
             lastFrameNanos = frameTimeNanos
             if (dt > 0) {
+                val k = exp(-friction * dt)
                 if (angVel != 0.0) {
                     rotateBy(angVel * dt, wheelCenterX(), wheelCenterY())
-                    angVel *= exp(-2.2 * dt)
-                    if (abs(angVel) < 0.05) angVel = 0.0
+                    angVel *= k
+                    if (abs(angVel) * lastRotR < 12.0) angVel = 0.0
                 }
                 if (panVx != 0.0 || panVy != 0.0) {
                     panBy((panVx * dt).toFloat(), (panVy * dt).toFloat())
-                    val k = exp(-2.2 * dt)
                     panVx *= k; panVy *= k
                     if (hypot(panVx, panVy) < 20.0) { panVx = 0.0; panVy = 0.0 }
                 }
-                if (angVel == 0.0 && panVx == 0.0 && panVy == 0.0) {
+                if (zoomVel != 0.0) {
+                    val before = currentScale()
+                    zoomBy(zoomFx, zoomFy, exp(zoomVel * dt).toFloat())
+                    zoomVel *= k
+                    // Упёрлись в предел зума или почти затухли — стоп.
+                    if (currentScale() == before || abs(zoomVel) < 0.04) zoomVel = 0.0
+                }
+                if (angVel == 0.0 && panVx == 0.0 && panVy == 0.0 && zoomVel == 0.0) {
                     inertiaRunning = false
                     requestCrisp()
                     return
@@ -183,16 +200,22 @@ class WheelView(context: Context) : View(context) {
         inertiaRunning = false
         angVel = 0.0
         panVx = 0.0; panVy = 0.0
+        zoomVel = 0.0
     }
 
-    private fun startInertia() {
-        angVel = (angVel * 0.4).coerceIn(-9.0, 9.0)
-        if (abs(angVel) <= 0.25) angVel = 0.0
-        panVx *= 0.4; panVy *= 0.4
+    private fun startInertia(upTimeMs: Long) {
+        // Скорости протухают: палец подержали неподвижно — импульса нет.
+        val stale = exp(-friction * ((upTimeMs - velTimeMs).coerceAtLeast(0) / 1000.0))
+        angVel = (angVel * stale * launch).coerceIn(-9.0, 9.0)
+        if (abs(angVel) * lastRotR <= 70.0) angVel = 0.0 // порог — экранные px/s
+        panVx *= stale * launch; panVy *= stale * launch
         val panSpeed = hypot(panVx, panVy)
         if (panSpeed > 6000.0) { panVx *= 6000.0 / panSpeed; panVy *= 6000.0 / panSpeed }
-        if (panSpeed <= 150.0) { panVx = 0.0; panVy = 0.0 }
-        if (angVel != 0.0 || panVx != 0.0 || panVy != 0.0) {
+        if (panSpeed <= 100.0) { panVx = 0.0; panVy = 0.0 }
+        val zoomStale = exp(-friction * ((upTimeMs - lastPinchMs).coerceAtLeast(0) / 1000.0))
+        zoomVel = (zoomVel * zoomStale * launch).coerceIn(-4.0, 4.0)
+        if (abs(zoomVel) <= 0.25) zoomVel = 0.0
+        if (angVel != 0.0 || panVx != 0.0 || panVy != 0.0 || zoomVel != 0.0) {
             inertiaRunning = true
             lastFrameNanos = System.nanoTime()
             Choreographer.getInstance().postFrameCallback(inertiaCallback)
@@ -256,6 +279,7 @@ class WheelView(context: Context) : View(context) {
                 gestureMode = 2
                 angVel = 0.0
                 panVx = 0.0; panVy = 0.0
+                zoomVel = 0.0
                 velTimeMs = e.eventTime
             }
 
@@ -269,7 +293,12 @@ class WheelView(context: Context) : View(context) {
                     val dy = fy - lastFocalY
                     panBy(dx, dy)
                     val span = spanOf(e)
-                    if (lastSpan > 1f && span > 1f) zoomBy(fx, fy, span / lastSpan)
+                    if (lastSpan > 1f && span > 1f) {
+                        zoomBy(fx, fy, span / lastSpan)
+                        zoomVel = zoomVel * 0.5 + (Math.log((span / lastSpan).toDouble()) / dt) * 0.5
+                        zoomFx = fx; zoomFy = fy
+                        lastPinchMs = t
+                    }
                     lastFocalX = fx; lastFocalY = fy
                     lastSpan = span
                     angVel = 0.0
@@ -301,20 +330,14 @@ class WheelView(context: Context) : View(context) {
                 lastFocalX = e.x; lastFocalY = e.y
 
                 if (gestureMode == 0) {
-                    if (currentScale() <= 1.05f) {
-                        // Малый масштаб: круг целиком на экране — палец вне
-                        // центра всегда крутит, осевой замок не нужен.
-                        gestureMode = 1
-                    } else {
-                        accumTan += dTan
-                        accumRad += dRad
-                        val at = abs(accumTan)
-                        val ar = abs(accumRad)
-                        gestureMode = when {
-                            at >= lockThreshold && at >= ar * lockHysteresis -> 1
-                            ar >= lockThreshold && ar >= at * lockHysteresis -> 2
-                            else -> return true
-                        }
+                    accumTan += dTan
+                    accumRad += dRad
+                    val at = abs(accumTan)
+                    val ar = abs(accumRad)
+                    gestureMode = when {
+                        at >= lockThreshold && at >= ar * lockHysteresis -> 1
+                        ar >= lockThreshold && ar >= at * lockHysteresis -> 2
+                        else -> return true
                     }
                 }
 
@@ -328,13 +351,14 @@ class WheelView(context: Context) : View(context) {
                 }
 
                 // Вращение точным угловым сдвигом (atan2), а не dTan/r —
-                // на малом масштабе палец ходит по крутым дугам вокруг центра,
+                // при отдалении палец ходит по крутым дугам вокруг центра,
                 // и линейное приближение заметно врёт.
                 var rot = atan2((e.y - cyW).toDouble(), (e.x - cxW).toDouble()) -
                     atan2((prevY - cyW).toDouble(), (prevX - cxW).toDouble())
                 if (rot > Math.PI) rot -= 2 * Math.PI
                 if (rot < -Math.PI) rot += 2 * Math.PI
                 angVel = angVel * 0.5 + (rot / dt) * 0.5
+                lastRotR = r // радиус хвата — для px-порогов инерции
                 panVx = 0.0; panVy = 0.0
                 velTimeMs = t
                 rotateBy(rot, cxW, cyW)
@@ -347,7 +371,7 @@ class WheelView(context: Context) : View(context) {
             }
 
             MotionEvent.ACTION_UP -> {
-                startInertia()
+                startInertia(e.eventTime)
             }
 
             MotionEvent.ACTION_CANCEL -> {

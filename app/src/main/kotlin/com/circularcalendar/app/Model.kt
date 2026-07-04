@@ -52,9 +52,9 @@ class WheelSettings(
     val nowAtBottom: Boolean = true,
     val themeIndex: Int = 0,
     val calendarFilter: CalendarFilter = CalendarFilter(),
-    // Крупные (≥ дня) события: false = «снизу», у кольца дней (как в v0.4);
-    // true = «сверху», дальше от кольца, а нижняя полоса отдана коротким
-    // событиям — они делят её между собой, ужимаясь при наложении.
+    // Крупные события: false = «снизу», у кольца дней (укладка как в v0.4);
+    // true = «сверху» — иерархия длительности: из двух пересекающихся
+    // более длинное уходит дальше от кольца, короткие остаются у кольца.
     val largeEventsOnTop: Boolean = false,
 ) {
     val theme: WheelTheme get() = THEMES[themeIndex.coerceIn(0, THEMES.size - 1)]
@@ -78,10 +78,6 @@ class EventBand(
     val startFrac: Double,
     val endFrac: Double,
     var layer: Int = 0,
-    // Деление одной полосы между короткими событиями (режим «крупные сверху»):
-    // полоса режется на [subCount] дорожек по радиусу, событие — в дорожке [sub].
-    var sub: Int = 0,
-    var subCount: Int = 1,
 )
 
 /** Граница «крупного» события: занимает на круге не меньше суток. */
@@ -127,41 +123,7 @@ fun buildEventBands(
         }
     }
 
-    if (!largeOnTop) {
-        assignLayers(bands)
-        return bands
-    }
-
-    // Режим «крупные сверху»: короткие (< дня) события живут в нижней полосе
-    // (слой 0) и делят её между собой; крупные укладываются слоями выше.
-    val small = ArrayList<EventBand>()
-    val large = ArrayList<EventBand>()
-    for (b in bands) {
-        if (b.endFrac - b.startFrac >= LARGE_BAND_FRAC) large.add(b) else small.add(b)
-    }
-    assignLayers(large)
-    for (b in large) b.layer++ // слой 0 зарезервирован под короткие
-
-    assignLayers(small)
-    // Кластеры пересечения: внутри каждого полоса делится на столько дорожек,
-    // сколько коротких событий реально наложилось (subCount = слои кластера).
-    var i = 0
-    while (i < small.size) {
-        var j = i
-        var clusterEnd = small[i].endFrac
-        var maxLayer = 0
-        while (j < small.size && (j == i || small[j].startFrac < clusterEnd - 1e-12)) {
-            if (small[j].endFrac > clusterEnd) clusterEnd = small[j].endFrac
-            if (small[j].layer > maxLayer) maxLayer = small[j].layer
-            j++
-        }
-        for (k in i until j) {
-            small[k].sub = small[k].layer
-            small[k].subCount = maxLayer + 1
-            small[k].layer = 0
-        }
-        i = j
-    }
+    if (largeOnTop) assignLayersByDuration(bands) else assignLayers(bands)
     return bands
 }
 
@@ -178,6 +140,41 @@ private fun assignLayers(bands: MutableList<EventBand>) {
             }
             if (b.startFrac >= layerEnds[layer] - 1e-12) {
                 layerEnds[layer] = b.endFrac; break
+            }
+            layer++
+        }
+        b.layer = layer
+    }
+}
+
+// Укладка «по приоритету длительности» (режим «крупные сверху»): короткие
+// события первыми занимают полосу у кольца дней; из двух пересекающихся
+// более длинное уходит дальше (глубже). Слой = первый без пересечений.
+private fun assignLayersByDuration(bands: List<EventBand>) {
+    val sorted = bands.sortedWith(
+        compareBy<EventBand>({ it.endFrac - it.startFrac }, { it.startFrac }),
+    )
+    // На слой — интервалы, отсортированные по началу (вставка бинпоиском).
+    val starts = ArrayList<ArrayList<Double>>()
+    val ends = ArrayList<ArrayList<Double>>()
+    for (b in sorted) {
+        var layer = 0
+        while (true) {
+            if (layer >= starts.size) {
+                starts.add(arrayListOf(b.startFrac))
+                ends.add(arrayListOf(b.endFrac))
+                break
+            }
+            val ss = starts[layer]
+            val ee = ends[layer]
+            var idx = ss.binarySearch(b.startFrac)
+            if (idx < 0) idx = -idx - 1
+            val freeLeft = idx == 0 || ee[idx - 1] <= b.startFrac + 1e-12
+            val freeRight = idx == ss.size || ss[idx] >= b.endFrac - 1e-12
+            if (freeLeft && freeRight) {
+                ss.add(idx, b.startFrac)
+                ee.add(idx, b.endFrac)
+                break
             }
             layer++
         }
