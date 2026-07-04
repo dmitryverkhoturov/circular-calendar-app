@@ -9,6 +9,12 @@ fun withAlpha(color: Int, alpha: Float): Int {
     return (color and 0x00FFFFFF) or (a shl 24)
 }
 
+/** Умножает существующий альфа-канал цвета на [k] (для LOD-проявления). */
+fun mulAlpha(color: Int, k: Float): Int {
+    val a = ((color ushr 24) * k.coerceIn(0f, 1f) + 0.5f).toInt().coerceIn(0, 255)
+    return (color and 0x00FFFFFF) or (a shl 24)
+}
+
 const val WHITE = 0xFFFFFFFF.toInt()
 
 class WheelTheme(

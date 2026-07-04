@@ -151,48 +151,87 @@ fun drawWheel(
         }
     }
 
+    // ── LOD-лестница рисок: месяцы всегда, недели → дни → часы по зуму ──────
+    // Порог — экранное расстояние между соседними рисками одного вида:
+    // риски плавно проявляются, когда им хватает места.
+    val pxPerDay = (2.0 * PI * outerR * lod.camScale / totalDays).toFloat()
+    fun fade(v: Float, lo: Float, hi: Float): Float = ((v - lo) / (hi - lo)).coerceIn(0f, 1f)
+    val weekVis = fade(pxPerDay, 2.5f, 4.5f)   // недели: с ~зума 0.3
+    val dayVis = fade(pxPerDay, 4.5f, 8.0f)    // дни: к дефолтному зуму — полные
+    val hourVis = fade(pxPerDay / 24f, 4f, 7f) // часы: при близком зуме
+
     // ── Недельные линии (понедельники) — тусклее месячных ────────────────────
-    val weekPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = withAlpha(th.weekLineColor, th.weekLineAlpha)
-        strokeWidth = th.weekLineWidth * unit
-    }
-    for (d in 1 until totalDays) {
-        val date = yearStart.plusDays(d.toLong())
-        if (date.dayOfWeek != DayOfWeek.MONDAY) continue
-        val f = frac(date)
-        if (!lod.visiblePoint(f)) continue
-        canvas.drawLine(cx, cy, pointX(f, outerR), pointY(f, outerR), weekPaint)
+    if (weekVis > 0f) {
+        val weekPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = withAlpha(th.weekLineColor, th.weekLineAlpha * weekVis)
+            strokeWidth = th.weekLineWidth * unit
+        }
+        for (d in 1 until totalDays) {
+            val date = yearStart.plusDays(d.toLong())
+            if (date.dayOfWeek != DayOfWeek.MONDAY) continue
+            val f = frac(date)
+            if (!lod.visiblePoint(f)) continue
+            canvas.drawLine(cx, cy, pointX(f, outerR), pointY(f, outerR), weekPaint)
+        }
     }
 
     // ── Риски дней ───────────────────────────────────────────────────────────
     val tickLen = 5.0f * unit
-    val dayTickPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = withAlpha(th.dayTickColor, th.dayTickAlpha)
-        strokeWidth = th.dayTickWidth * unit
+    if (dayVis > 0f) {
+        val dayTickPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = withAlpha(th.dayTickColor, th.dayTickAlpha * dayVis)
+            strokeWidth = th.dayTickWidth * unit
+        }
+        for (d in 1 until totalDays) {
+            val f = frac(yearStart.plusDays(d.toLong()))
+            if (!lod.visiblePoint(f)) continue
+            canvas.drawLine(
+                pointX(f, outerR), pointY(f, outerR),
+                pointX(f, outerR - tickLen), pointY(f, outerR - tickLen),
+                dayTickPaint,
+            )
+        }
     }
-    for (d in 1 until totalDays) {
-        val f = frac(yearStart.plusDays(d.toLong()))
-        if (!lod.visiblePoint(f)) continue
-        canvas.drawLine(
-            pointX(f, outerR), pointY(f, outerR),
-            pointX(f, outerR - tickLen), pointY(f, outerR - tickLen),
-            dayTickPaint,
-        )
+
+    // ── Часовые риски — короче и тоньше дневных, только при близком зуме ────
+    if (hourVis > 0f) {
+        val hourTickLen = 2.5f * unit
+        val hourPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = withAlpha(th.dayTickColor, th.dayTickAlpha * 0.8f * hourVis)
+            strokeWidth = th.dayTickWidth * unit * 0.6f
+        }
+        for (d in 0 until totalDays) {
+            val f0 = frac(yearStart.plusDays(d.toLong()))
+            val f1 = frac(yearStart.plusDays(d + 1L))
+            if (!lod.visible(f0, f1)) continue
+            for (h in 1..23) {
+                val f = f0 + (f1 - f0) * h / 24.0
+                if (!lod.visiblePoint(f)) continue
+                canvas.drawLine(
+                    pointX(f, outerR), pointY(f, outerR),
+                    pointX(f, outerR - hourTickLen), pointY(f, outerR - hourTickLen),
+                    hourPaint,
+                )
+            }
+        }
     }
 
     // ── Числа дней (между рисками, чуть внутрь от конца рисок, §13) ─────────
+    // Проявляются вместе с дневными рисками (та же LOD-ступень).
     val dayNumFs = 4.5f * unit
     val dayNumR = outerR - tickLen - 1.5f * unit - dayNumFs * 0.5f
-    for (d in 0 until totalDays) {
-        val date = yearStart.plusDays(d.toLong())
-        val fmid = frac(date.plusHours(12))
-        if (!lod.visiblePoint(fmid)) continue
-        val past = fmid <= nowFrac
-        radialText(
-            date.dayOfMonth.toString(), fmid, dayNumR,
-            fsize = dayNumFs,
-            color = if (past) th.dayNumPast else th.dayNumFuture,
-        )
+    if (dayVis > 0f) {
+        for (d in 0 until totalDays) {
+            val date = yearStart.plusDays(d.toLong())
+            val fmid = frac(date.plusHours(12))
+            if (!lod.visiblePoint(fmid)) continue
+            val past = fmid <= nowFrac
+            radialText(
+                date.dayOfMonth.toString(), fmid, dayNumR,
+                fsize = dayNumFs,
+                color = mulAlpha(if (past) th.dayNumPast else th.dayNumFuture, dayVis),
+            )
+        }
     }
 
     // ── Границы месяцев ──────────────────────────────────────────────────────
@@ -284,7 +323,12 @@ fun drawWheel(
             val sweepFrac = b.endFrac - b.startFrac
             if (sweepFrac * pxPerFrac < 0.5) continue
 
-            val rRaw = eventBandBaseR - b.layer * (bandW + bandGap) - bandW / 2f
+            // Дорожка внутри полосы: короткие события в режиме «крупные сверху»
+            // делят слой 0 по радиусу (subCount дорожек) и ужимаются.
+            val subW = bandW / b.subCount
+            val halfW = subW / 2f * (if (b.subCount > 1) 0.86f else 1f)
+            val laneTop = eventBandBaseR - b.layer * (bandW + bandGap)
+            val rRaw = laneTop - (b.sub + 0.5f) * subW
             val r = rRaw.coerceIn(minBandR, eventBandBaseR)
             val a0 = angleOf(b.startFrac)
             val a1 = angleOf(b.endFrac)
@@ -292,13 +336,13 @@ fun drawWheel(
             val isPast = b.endFrac <= nowFrac
             val alpha = if (isPast) th.eventPastAlpha else th.eventFutureAlpha
             bandPaint.color = withAlpha(b.event.color, alpha)
-            buildBandPath(bandPath, cx, cy, r, bandW / 2f, a0, a1)
+            buildBandPath(bandPath, cx, cy, r, halfW, a0, a1)
             canvas.drawPath(bandPath, bandPaint)
 
             drawBandTitle(
-                canvas, textPaint, b.event.title, cx, cy, r, bandW, a0, a1,
+                canvas, textPaint, b.event.title, cx, cy, r, halfW * 2f, a0, a1,
                 b.event.color, alpha, settings.nowAtBottom,
-                isDayPlus = sweepFrac >= 1.0 / 366.0,
+                isDayPlus = sweepFrac >= LARGE_BAND_FRAC,
                 ccw = settings.counterClockwise,
                 camScale = lod.camScale,
             )

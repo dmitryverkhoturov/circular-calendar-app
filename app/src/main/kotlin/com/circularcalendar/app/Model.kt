@@ -52,6 +52,10 @@ class WheelSettings(
     val nowAtBottom: Boolean = true,
     val themeIndex: Int = 0,
     val calendarFilter: CalendarFilter = CalendarFilter(),
+    // Крупные (≥ дня) события: false = «снизу», у кольца дней (как в v0.4);
+    // true = «сверху», дальше от кольца, а нижняя полоса отдана коротким
+    // событиям — они делят её между собой, ужимаясь при наложении.
+    val largeEventsOnTop: Boolean = false,
 ) {
     val theme: WheelTheme get() = THEMES[themeIndex.coerceIn(0, THEMES.size - 1)]
 
@@ -60,7 +64,8 @@ class WheelSettings(
         nowAtBottom: Boolean = this.nowAtBottom,
         themeIndex: Int = this.themeIndex,
         calendarFilter: CalendarFilter = this.calendarFilter,
-    ) = WheelSettings(counterClockwise, nowAtBottom, themeIndex, calendarFilter)
+        largeEventsOnTop: Boolean = this.largeEventsOnTop,
+    ) = WheelSettings(counterClockwise, nowAtBottom, themeIndex, calendarFilter, largeEventsOnTop)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -73,7 +78,14 @@ class EventBand(
     val startFrac: Double,
     val endFrac: Double,
     var layer: Int = 0,
+    // Деление одной полосы между короткими событиями (режим «крупные сверху»):
+    // полоса режется на [subCount] дорожек по радиусу, событие — в дорожке [sub].
+    var sub: Int = 0,
+    var subCount: Int = 1,
 )
+
+/** Граница «крупного» события: занимает на круге не меньше суток. */
+const val LARGE_BAND_FRAC = 1.0 / 366.0
 
 /**
  * Строит ленточки с правилом окна ±6 месяцев от «сейчас»: каждый угловой слот
@@ -81,7 +93,12 @@ class EventBand(
  * приглушённым; при подходе к концу года дальнее прошлое замещается событиями
  * следующего года (перекат, SPEC §5) — БЕЗ наложения двух копий на одном угле.
  */
-fun buildEventBands(events: List<CalendarEvent>, year: Int, nowFrac: Double): List<EventBand> {
+fun buildEventBands(
+    events: List<CalendarEvent>,
+    year: Int,
+    nowFrac: Double,
+    largeOnTop: Boolean = false,
+): List<EventBand> {
     val yearStart = LocalDateTime.of(year, 1, 1, 0, 0)
     val nextYearStart = LocalDateTime.of(year + 1, 1, 1, 0, 0)
     val nextYearEnd = LocalDateTime.of(year + 2, 1, 1, 0, 0)
@@ -110,8 +127,47 @@ fun buildEventBands(events: List<CalendarEvent>, year: Int, nowFrac: Double): Li
         }
     }
 
-    // Жадная укладка: сортируем по началу, длиннее — первее;
-    // слой = первый, где событие не пересекает конец предыдущего.
+    if (!largeOnTop) {
+        assignLayers(bands)
+        return bands
+    }
+
+    // Режим «крупные сверху»: короткие (< дня) события живут в нижней полосе
+    // (слой 0) и делят её между собой; крупные укладываются слоями выше.
+    val small = ArrayList<EventBand>()
+    val large = ArrayList<EventBand>()
+    for (b in bands) {
+        if (b.endFrac - b.startFrac >= LARGE_BAND_FRAC) large.add(b) else small.add(b)
+    }
+    assignLayers(large)
+    for (b in large) b.layer++ // слой 0 зарезервирован под короткие
+
+    assignLayers(small)
+    // Кластеры пересечения: внутри каждого полоса делится на столько дорожек,
+    // сколько коротких событий реально наложилось (subCount = слои кластера).
+    var i = 0
+    while (i < small.size) {
+        var j = i
+        var clusterEnd = small[i].endFrac
+        var maxLayer = 0
+        while (j < small.size && (j == i || small[j].startFrac < clusterEnd - 1e-12)) {
+            if (small[j].endFrac > clusterEnd) clusterEnd = small[j].endFrac
+            if (small[j].layer > maxLayer) maxLayer = small[j].layer
+            j++
+        }
+        for (k in i until j) {
+            small[k].sub = small[k].layer
+            small[k].subCount = maxLayer + 1
+            small[k].layer = 0
+        }
+        i = j
+    }
+    return bands
+}
+
+// Жадная укладка: сортируем по началу, длиннее — первее;
+// слой = первый, где событие не пересекает конец предыдущего.
+private fun assignLayers(bands: MutableList<EventBand>) {
     bands.sortWith(compareBy<EventBand> { it.startFrac }.thenByDescending { it.endFrac })
     val layerEnds = ArrayList<Double>()
     for (b in bands) {
@@ -127,7 +183,6 @@ fun buildEventBands(events: List<CalendarEvent>, year: Int, nowFrac: Double): Li
         }
         b.layer = layer
     }
-    return bands
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

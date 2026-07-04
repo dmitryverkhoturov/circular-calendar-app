@@ -32,6 +32,9 @@ import kotlin.math.min
 //
 // Жесты — порт из Flutter-версии: осевой замок (порог 10dp, гистерезис 1.4),
 // центр = панорама, два пальца = пан+пинч, инерция exp(-2.2·dt), даблтап = сброс.
+// На малом масштабе (круг целиком на экране, зум ≤ 1.05) осевой замок не нужен:
+// один палец вне центра всегда крутит — панорама там остаётся за центром
+// и двумя пальцами. Инерция есть и у вращения, и у панорамы.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class WheelView(context: Context) : View(context) {
@@ -115,9 +118,29 @@ class WheelView(context: Context) : View(context) {
     private var lastSpan = 0f
 
     private var angVel = 0.0
+    private var panVx = 0.0
+    private var panVy = 0.0
     private var velTimeMs = 0L
     private var inertiaRunning = false
     private var lastFrameNanos = 0L
+
+    // Камера, сохранённая перед прошлым закрытием: применяется в onSizeChanged,
+    // только если размер вью совпал (иначе матрица не имеет смысла).
+    private var pendingCamera: FloatArray? = null
+    private var pendingCamW = 0
+    private var pendingCamH = 0
+
+    fun cameraValues(): FloatArray {
+        val v = FloatArray(9)
+        camera.getValues(v)
+        return v
+    }
+
+    fun setPendingCamera(values: FloatArray, w: Int, h: Int) {
+        pendingCamera = values
+        pendingCamW = w
+        pendingCamH = h
+    }
 
     private val doubleTapDetector = GestureDetector(
         context,
@@ -135,10 +158,18 @@ class WheelView(context: Context) : View(context) {
             val dt = (frameTimeNanos - lastFrameNanos) / 1e9
             lastFrameNanos = frameTimeNanos
             if (dt > 0) {
-                rotateBy(angVel * dt, wheelCenterX(), wheelCenterY())
-                angVel *= exp(-2.2 * dt)
-                if (abs(angVel) < 0.05) {
-                    angVel = 0.0
+                if (angVel != 0.0) {
+                    rotateBy(angVel * dt, wheelCenterX(), wheelCenterY())
+                    angVel *= exp(-2.2 * dt)
+                    if (abs(angVel) < 0.05) angVel = 0.0
+                }
+                if (panVx != 0.0 || panVy != 0.0) {
+                    panBy((panVx * dt).toFloat(), (panVy * dt).toFloat())
+                    val k = exp(-2.2 * dt)
+                    panVx *= k; panVy *= k
+                    if (hypot(panVx, panVy) < 20.0) { panVx = 0.0; panVy = 0.0 }
+                }
+                if (angVel == 0.0 && panVx == 0.0 && panVy == 0.0) {
                     inertiaRunning = false
                     requestCrisp()
                     return
@@ -151,16 +182,21 @@ class WheelView(context: Context) : View(context) {
     private fun stopInertia() {
         inertiaRunning = false
         angVel = 0.0
+        panVx = 0.0; panVy = 0.0
     }
 
     private fun startInertia() {
         angVel = (angVel * 0.4).coerceIn(-9.0, 9.0)
-        if (abs(angVel) > 0.25) {
+        if (abs(angVel) <= 0.25) angVel = 0.0
+        panVx *= 0.4; panVy *= 0.4
+        val panSpeed = hypot(panVx, panVy)
+        if (panSpeed > 6000.0) { panVx *= 6000.0 / panSpeed; panVy *= 6000.0 / panSpeed }
+        if (panSpeed <= 150.0) { panVx = 0.0; panVy = 0.0 }
+        if (angVel != 0.0 || panVx != 0.0 || panVy != 0.0) {
             inertiaRunning = true
             lastFrameNanos = System.nanoTime()
             Choreographer.getInstance().postFrameCallback(inertiaCallback)
         } else {
-            angVel = 0.0
             requestCrisp()
         }
     }
@@ -219,17 +255,27 @@ class WheelView(context: Context) : View(context) {
                 lastSpan = spanOf(e)
                 gestureMode = 2
                 angVel = 0.0
+                panVx = 0.0; panVy = 0.0
+                velTimeMs = e.eventTime
             }
 
             MotionEvent.ACTION_MOVE -> {
+                val t = e.eventTime
+                val dt = ((t - velTimeMs) / 1000.0).coerceIn(0.008, 0.1)
+
                 if (e.pointerCount >= 2) {
                     val (fx, fy) = focalOf(e)
-                    panBy(fx - lastFocalX, fy - lastFocalY)
+                    val dx = fx - lastFocalX
+                    val dy = fy - lastFocalY
+                    panBy(dx, dy)
                     val span = spanOf(e)
                     if (lastSpan > 1f && span > 1f) zoomBy(fx, fy, span / lastSpan)
                     lastFocalX = fx; lastFocalY = fy
                     lastSpan = span
                     angVel = 0.0
+                    panVx = panVx * 0.5 + (dx / dt) * 0.5
+                    panVy = panVy * 0.5 + (dy / dt) * 0.5
+                    velTimeMs = t
                     gestureMode = 2
                     return true
                 }
@@ -255,27 +301,41 @@ class WheelView(context: Context) : View(context) {
                 lastFocalX = e.x; lastFocalY = e.y
 
                 if (gestureMode == 0) {
-                    accumTan += dTan
-                    accumRad += dRad
-                    val at = abs(accumTan)
-                    val ar = abs(accumRad)
-                    gestureMode = when {
-                        at >= lockThreshold && at >= ar * lockHysteresis -> 1
-                        ar >= lockThreshold && ar >= at * lockHysteresis -> 2
-                        else -> return true
+                    if (currentScale() <= 1.05f) {
+                        // Малый масштаб: круг целиком на экране — палец вне
+                        // центра всегда крутит, осевой замок не нужен.
+                        gestureMode = 1
+                    } else {
+                        accumTan += dTan
+                        accumRad += dRad
+                        val at = abs(accumTan)
+                        val ar = abs(accumRad)
+                        gestureMode = when {
+                            at >= lockThreshold && at >= ar * lockHysteresis -> 1
+                            ar >= lockThreshold && ar >= at * lockHysteresis -> 2
+                            else -> return true
+                        }
                     }
                 }
 
                 if (gestureMode == 2) {
                     panBy(dxAll, dyAll)
                     angVel = 0.0
+                    panVx = panVx * 0.5 + (dxAll / dt) * 0.5
+                    panVy = panVy * 0.5 + (dyAll / dt) * 0.5
+                    velTimeMs = t
                     return true
                 }
 
-                val rot = (dTan / r).toDouble()
-                val t = e.eventTime
-                val dt = ((t - velTimeMs) / 1000.0).coerceIn(0.008, 0.1)
+                // Вращение точным угловым сдвигом (atan2), а не dTan/r —
+                // на малом масштабе палец ходит по крутым дугам вокруг центра,
+                // и линейное приближение заметно врёт.
+                var rot = atan2((e.y - cyW).toDouble(), (e.x - cxW).toDouble()) -
+                    atan2((prevY - cyW).toDouble(), (prevX - cxW).toDouble())
+                if (rot > Math.PI) rot -= 2 * Math.PI
+                if (rot < -Math.PI) rot += 2 * Math.PI
                 angVel = angVel * 0.5 + (rot / dt) * 0.5
+                panVx = 0.0; panVy = 0.0
                 velTimeMs = t
                 rotateBy(rot, cxW, cyW)
             }
@@ -287,14 +347,11 @@ class WheelView(context: Context) : View(context) {
             }
 
             MotionEvent.ACTION_UP -> {
-                if (gestureMode == 1) startInertia() else {
-                    angVel = 0.0
-                    requestCrisp()
-                }
+                startInertia()
             }
 
             MotionEvent.ACTION_CANCEL -> {
-                angVel = 0.0
+                stopInertia()
                 requestCrisp()
             }
         }
@@ -308,13 +365,17 @@ class WheelView(context: Context) : View(context) {
         this.events = events
         this.now = now
         val filtered = events.filter { settings.calendarFilter.allows(it) }
-        this.bands = buildEventBands(filtered, now.year, nowFrac())
+        this.bands = buildEventBands(filtered, now.year, nowFrac(), settings.largeEventsOnTop)
         setBackgroundColor(settings.theme.background)
         sceneDirty = true
         invalidate()
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        pendingCamera?.let {
+            if (w == pendingCamW && h == pendingCamH) camera.setValues(it)
+            pendingCamera = null
+        }
         sceneDirty = true
     }
 

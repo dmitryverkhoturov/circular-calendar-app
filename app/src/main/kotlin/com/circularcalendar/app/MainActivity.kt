@@ -67,6 +67,7 @@ class MainActivity : Activity() {
             nowAtBottom = p.getBoolean("nowBottom", true),
             themeIndex = p.getInt("themeIdx", 0).coerceIn(0, THEMES.size - 1),
             calendarFilter = filter,
+            largeEventsOnTop = p.getBoolean("largeTop", false),
         )
     }
 
@@ -75,10 +76,32 @@ class MainActivity : Activity() {
         p.putBoolean("ccw", settings.counterClockwise)
         p.putBoolean("nowBottom", settings.nowAtBottom)
         p.putInt("themeIdx", settings.themeIndex)
+        p.putBoolean("largeTop", settings.largeEventsOnTop)
         val ids = settings.calendarFilter.allowedIds
         if (ids == null) p.remove("calFilter")
         else p.putString("calFilter", JSONArray(ids.toList()).toString())
         p.apply()
+    }
+
+    // Камера (зум/поворот/пан) переживает рестарт: "w,h,9 значений матрицы".
+    private fun saveCamera() {
+        if (wheel.width <= 0 || wheel.height <= 0) return
+        val v = wheel.cameraValues()
+        getSharedPreferences("settings", MODE_PRIVATE).edit()
+            .putString("camera", "${wheel.width},${wheel.height}," + v.joinToString(","))
+            .apply()
+    }
+
+    private fun restoreCamera() {
+        val s = getSharedPreferences("settings", MODE_PRIVATE)
+            .getString("camera", null) ?: return
+        try {
+            val parts = s.split(',')
+            if (parts.size != 11) return
+            val vals = FloatArray(9) { parts[it + 2].toFloat() }
+            wheel.setPendingCamera(vals, parts[0].toInt(), parts[1].toInt())
+        } catch (_: Exception) {
+        }
     }
 
     private fun applySettings(s: WheelSettings) {
@@ -154,6 +177,7 @@ class MainActivity : Activity() {
 
         // Мок всегда — виден сразу; реальные календари загрузятся асинхронно.
         events = buildMockEvents(now.year)
+        restoreCamera()
         wheel.update(settings, events, now)
         mainHandler.postDelayed(nowTicker, 60_000)
 
@@ -164,6 +188,11 @@ class MainActivity : Activity() {
         super.onResume()
         // Обновление событий при каждом возврате в приложение.
         if (CalendarRepo.hasPermission(this)) loadCalendarData()
+    }
+
+    override fun onPause() {
+        saveCamera()
+        super.onPause()
     }
 
     override fun onDestroy() {
@@ -316,6 +345,16 @@ class MainActivity : Activity() {
         col.addView(toggle(listOf("Внизу", "Вверху"),
             if (settings.nowAtBottom) 0 else 1) { i ->
             applySettings(settings.copy(nowAtBottom = i == 0))
+        })
+        space(14f)
+
+        col.addView(label("Крупные события"))
+        space(6f)
+        // «Снизу» — у кольца дней (как раньше); «Сверху» — дальше от кольца,
+        // а нижнюю полосу делят между собой короткие (< дня) события.
+        col.addView(toggle(listOf("Снизу", "Сверху"),
+            if (settings.largeEventsOnTop) 1 else 0) { i ->
+            applySettings(settings.copy(largeEventsOnTop = i == 1))
         })
         space(14f)
 
