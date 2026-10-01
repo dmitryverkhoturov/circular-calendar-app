@@ -123,14 +123,16 @@ fun drawWheel(
 
     // ── Окна видимости ───────────────────────────────────────────────────────
     val winLen = lod.aHi - lod.aLo
-    val fLo: Double
-    val fHi: Double
-    if (lod.full) {
-        fLo = 0.0; fHi = 1.0 - 1e-12
-    } else {
+    var fLo = 0.0
+    var fHi = 1.0 - 1e-12
+    if (!lod.full) {
         val f1 = tm.fracOfAngle(lod.aLo)
         val f2 = tm.fracOfAngle(lod.aHi)
         fLo = min(f1, f2); fHi = max(f1, f2)
+        // Окно — в первом обороте после опорного момента (углы камеры могут
+        // накрутить много оборотов, а событиям и датам нужен «этот» год).
+        val sh = floor(fLo - tm.nowFrac + 0.5)
+        fLo -= sh; fHi -= sh
     }
 
     fun visible(fs: Double, fe: Double): Boolean {
@@ -332,52 +334,44 @@ fun drawWheel(
         }
     }
 
-    // ── Числа дней — у самого края, между рисками ────────────────────────────
-    val dayPx = min(4.5 * unit * s, 12.0 * dens)
-    if (dayVis > 0f) {
-        val r = outerR - (dayPx * 0.78 + 1.0) / s
-        val k0 = floor(fLo * totalSec / 86400).toLong()
-        val k1 = ceil(fHi * totalSec / 86400).toLong()
-        for (k in k0..k1) {
-            val fmid = (k + 0.5) * 86400.0 / totalSec
-            if (!visible(fmid - 1e-6, fmid + 1e-6)) continue
-            val date = tm.yearStart.plusDays(k)
-            label(
-                date.dayOfMonth.toString(), tm.angleOf(fmid), r, dayPx.toFloat(),
-                mulAlpha(if (fmid <= nowFrac) th.dayNumPast else th.dayNumFuture, dayVis),
-            )
-        }
-    }
-
-    // ── Метки времени: 6ч → 3ч → 1ч → 30м … → 1с, по мере места ─────────────
+    // ── Подписи времени: фрактальная лестница день → час → минута → секунда ─
+    // Размер привязан к кругу (масштабируется вместе с ним, без скачков).
+    // День — крупное число на весь день; часы/минуты/секунды — каждое мельче
+    // (пропорционально своему интервалу) и ближе к краю, «над» крупным.
     run {
-        val steps = longArrayOf(21600, 10800, 3600, 1800, 900, 300, 60, 30, 15, 5, 1)
-        val need = 52.0 * dens / 2.75
-        var idx = -1
-        for (i in steps.indices) if (pxPerSec * steps[i] >= need) idx = i
-        if (idx < 0) return@run
-        val step = steps[idx]
-        val coarser = if (idx > 0) steps[idx - 1] else Long.MAX_VALUE
-        val newAlpha = fade(pxPerSec * step, need, need * 1.6)
-        val sizePx = 10.5f * dens
-        val r = outerR - (dayPx * 1.6 + 3.0 + sizePx * 0.55) / s
-        val k0 = ceil(fLo * totalSec / step).toLong()
-        val k1 = floor(fHi * totalSec / step).toLong()
-        if (k1 - k0 > 4000) return@run
-        val base = th.dayNumFuture
-        for (k in k0..k1) {
-            val sec = k * step
-            val a = if (coarser != Long.MAX_VALUE && Math.floorMod(sec, coarser) != 0L) newAlpha else 1f
-            if (a <= 0f) continue
-            val t = tm.yearStart.plusSeconds(sec)
-            val text = when {
-                t.hour == 0 && t.minute == 0 && t.second == 0 -> "${t.dayOfMonth} ${MONTHS_GEN[t.monthValue - 1]}"
-                step >= 60 || t.second == 0 -> "%02d:%02d".format(t.hour, t.minute)
-                else -> ":%02d".format(t.second)
+        val steps = longArrayOf(86400, 3600, 60, 1)
+        val fonts = DoubleArray(4) { i ->
+            if (i == 0) 4.5 * unit else 0.55 * 2 * PI * outerR * steps[i] / totalSec
+        }
+        // Ряды лесенкой внутрь: число дня у самого края, над ним (к центру)
+        // часы, над часами минуты, над минутами секунды. rc — центр ряда.
+        val rows = DoubleArray(4)
+        var edge = 0.18 * fonts[0]
+        for (i in 0..3) {
+            if (i > 0) edge += 0.35 * fonts[i]
+            rows[i] = outerR - edge - 0.36 * fonts[i]
+            edge += 0.72 * fonts[i]
+        }
+        for (i in 0..3) {
+            val f = fonts[i]
+            val vis = if (i == 0) dayVis else fade(f * s, 6.0, 10.0)
+            if (vis <= 0f || f * s > 3000) continue
+            val rc = rows[i]
+            if (rc + f < lod.rMin || rc - f > lod.rMax) continue
+            val step = steps[i]
+            val k0 = floor(fLo * totalSec / step).toLong()
+            val k1 = ceil(fHi * totalSec / step).toLong()
+            if (k1 - k0 > 3000) continue
+            for (k in k0..k1) {
+                val f0 = k * step / totalSec
+                val f1 = (k + 1) * step / totalSec
+                if (!visible(f0, f1)) continue
+                val text = if (i == 0) tm.yearStart.plusDays(k).dayOfMonth.toString()
+                else "%02d".format(Math.floorMod(k, if (i == 1) 24L else 60L))
+                val fmid = (f0 + f1) / 2
+                val c = if (fmid <= nowFrac) th.dayNumPast else th.dayNumFuture
+                label(text, tm.angleOf(fmid), rc, (f * s).toFloat(), mulAlpha(c, vis))
             }
-            val f = sec / totalSec
-            val c = if (f <= nowFrac) th.dayNumPast else base
-            label(text, tm.angleOf(f), r, sizePx, mulAlpha(withAlpha(c, min(1f, ((c ushr 24) / 255f) * 1.8f)), a))
         }
     }
 
@@ -395,42 +389,53 @@ fun drawWheel(
         )
     }
 
-    // ── Орбиты планет (бледные) ──────────────────────────────────────────────
+    // ── Орбиты планет (по настройке; бледные) ───────────────────────────────
     val au = g.tipR
-    val orbitPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = (0.8 / s).toFloat()
-        color = withAlpha(WHITE, 0.07f)
-    }
-    val earthLam = tm.earthNow.lambda
-    fun drawOrbit(o: Planet.Orbit) {
-        val rLo = o.a * (1 - o.e) * au
-        val rHi = o.a * (1 + o.e) * au
-        if (rHi < lod.rMin || rLo > lod.rMax) return
-        val c = clip(0.0, 2 * PI) ?: return
-        val rs = o.a * au * s
-        val step = if (rs > 2) sqrt(2.4 / rs) else 0.6
-        val n = ceil(abs(c[1] - c[0]) / step).toInt().coerceIn(8, 4096)
-        val path = Path()
-        for (i in 0..n) {
-            val a = c[0] + (c[1] - c[0]) * i / n
-            val phi = earthLam + tm.dir * (tm.anchor - a)
-            val r = o.a * (1 - o.e * o.e) / (1 + o.e * cos(phi - o.peri)) * au
-            val x = (lx + cos(a) * r).toFloat()
-            val y = (ly + sin(a) * r).toFloat()
-            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+    if (settings.showOrbits) {
+        val orbitPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = (0.8 / s).toFloat()
+            color = withAlpha(WHITE, 0.06f)
         }
-        canvas.drawPath(path, orbitPaint)
+        val pt = DoubleArray(2)
+        val path = Path()
+        fun drawOrbit(p: Planet) {
+            val o = p.elements(tm.jdNow)
+            val rLo = o.a * (1 - o.e) * au * 0.999
+            val rHi = o.a * (1 + o.e) * au * 1.001
+            if (rHi < lod.rMin || rLo > lod.rMax) return
+            // Окно углов → долготы → истинная аномалия (ν ≈ λ − ϖ, запас на наклон).
+            var nu0 = 0.0
+            var nu1 = 2 * PI
+            if (!lod.full) {
+                val l1 = tm.lamOfAngle(lod.aLo)
+                val l2 = tm.lamOfAngle(lod.aHi)
+                nu0 = min(l1, l2) - o.peri - 0.12
+                nu1 = max(l1, l2) - o.peri + 0.12
+            }
+            val rs = o.a * au * s
+            val step = if (rs > 2) sqrt(2.4 / rs) else 0.6
+            val n = ceil((nu1 - nu0) / step).toInt().coerceIn(8, 4096)
+            path.reset()
+            for (i in 0..n) {
+                p.pointAt(o, nu0 + (nu1 - nu0) * i / n, pt)
+                val a = tm.spaceAngle(atan2(pt[1], pt[0]))
+                val r = hypot(pt[0], pt[1]) * au
+                val x = (lx + cos(a) * r).toFloat()
+                val y = (ly + sin(a) * r).toFloat()
+                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+            canvas.drawPath(path, orbitPaint)
+        }
+        for (p in Astro.OTHER_PLANETS) drawOrbit(p)
+        if (tm.kepler) drawOrbit(Astro.EARTH)
     }
-    val planetPos = Astro.OTHER_PLANETS.map { it to it.at(tm.jdNow) }
-    for ((_, o) in planetPos) drawOrbit(o)
-    if (tm.kepler) drawOrbit(tm.earthNow)
 
     // ── События — дуги-ленточки ──────────────────────────────────────────────
     val bandW = th.eventBandWidth * unit
     val bandGap = 1.5 * unit
     val laneGap = 0.6 * unit
-    val eventBandBaseR = outerR - 7.5 * unit
+    val eventBandBaseR = outerR - 6.5 * unit
 
     if (bands.isNotEmpty()) {
         val minBandR = g.innerR + bandW / 2 + bandGap
@@ -504,24 +509,63 @@ fun drawWheel(
         }
     }
 
-    // ── Стрелка «сейчас»: от Солнца до Земли ─────────────────────────────────
-    val accent = th.accent
-    val nowAngle = tm.angleOf(nowFrac)
+}
+
+/**
+ * Динамический слой: стрелка «сейчас», Солнце, планеты, Земля, Луна.
+ * Рисуется КАЖДЫЙ кадр поверх кэшированной сцены (дёшево: десяток фигур),
+ * поэтому планеты и стрелка двигаются плавно в реальном времени.
+ */
+fun drawBodies(
+    canvas: Canvas,
+    width: Float,
+    height: Float,
+    tm: TimeMap,
+    settings: WheelSettings,
+    lod: Lod,
+) {
+    val g = WheelGeom(width, height)
+    val s = lod.camScale
+    val unit = g.unit
+    val lx = g.cx - lod.originX
+    val ly = g.cy - lod.originY
+    val au = g.tipR
+
+    fun lineW(base: Double, minPx: Double): Float {
+        val screen = if (s >= 1) base * unit * min(s.pow(0.15), 2.0) else base * unit * s
+        return (max(screen, minPx) / s).toFloat()
+    }
+    fun fade(v: Double, lo: Double, hi: Double): Float = ((v - lo) / (hi - lo)).coerceIn(0.0, 1.0).toFloat()
+    fun onScreen(x: Double, y: Double, r: Double) = hypot(x, y) < lod.visR + r + 60 / s
+
+    // ── Стрелка: от Солнца до Земли ──────────────────────────────────────────
+    val accent = settings.theme.accent
+    val nowAngle = tm.nowAngle
     val earthR = au * tm.earthDistAu
     val ex = lx + cos(nowAngle) * earthR
     val ey = ly + sin(nowAngle) * earthR
     val earthRc = au * Astro.EARTH.radiusKm / AU_KM
     val earthPx = earthRc * s
 
-    radial(nowAngle, 0.0, earthR, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = accent
-        strokeWidth = lineW(3.0, 1.5)
-        strokeCap = Paint.Cap.ROUND
-    })
+    run {
+        val ra = max(0.0, lod.rMin - 2 / s)
+        val rb = min(earthR, lod.rMax + 2 / s)
+        if (ra < rb) {
+            canvas.drawLine(
+                (lx + cos(nowAngle) * ra).toFloat(), (ly + sin(nowAngle) * ra).toFloat(),
+                (lx + cos(nowAngle) * rb).toFloat(), (ly + sin(nowAngle) * rb).toFloat(),
+                Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = accent
+                    strokeWidth = lineW(3.0, 1.5)
+                    strokeCap = Paint.Cap.ROUND
+                },
+            )
+        }
+    }
 
     // Ромбик на кончике — пока Земля не видна диском; дальше его заменяет она.
     val diamondAlpha = 1f - fade(earthPx, 3.0, 9.0)
-    if (diamondAlpha > 0f && hypot(ex, ey) < lod.visR + 50 / s) {
+    if (diamondAlpha > 0f && onScreen(ex, ey, 0.0)) {
         val size = lineW(3.8, 3.0).toDouble()
         val ca = cos(nowAngle); val sa = sin(nowAngle)
         val path = Path()
@@ -533,33 +577,22 @@ fun drawWheel(
         canvas.drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = withAlpha(accent, diamondAlpha) })
     }
 
-    // ── Солнечная система в истинном масштабе (1 а.е. = кончик стрелки) ─────
     val bodyPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    val namePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply {
-        textSize = 9.5f * dens
-        color = withAlpha(WHITE, 0.5f)
-        textAlign = Paint.Align.LEFT
-    }
 
-    fun onScreen(x: Double, y: Double, r: Double) = hypot(x, y) < lod.visR + r + 60 / s
-
-    fun bodyName(name: String, x: Double, y: Double, rc: Double) {
-        canvas.save()
-        canvas.translate(x.toFloat(), y.toFloat())
-        canvas.rotate(-lod.rotDeg)
-        canvas.scale(1f / sF, 1f / sF)
-        canvas.drawText(name, (max(rc * s, 1.5) + 4 * dens).toFloat(), namePaint.textSize * 0.35f, namePaint)
-        canvas.restore()
-    }
-
-    /** Диск с освещённой стороной к Солнцу (терминатор — мягкий градиент). */
+    /**
+     * Диск с освещённой стороной к Солнцу (мягкий терминатор). Пока тело
+     * меньше пары пикселей — еле заметная точка (пасхалка, не мешает);
+     * по мере приближения проявляется в полную силу.
+     */
     fun body(x: Double, y: Double, rc: Double, day: Int, night: Int) {
         if (!onScreen(x, y, rc)) return
+        val px = rc * s
+        val alpha = 0.16f + 0.84f * fade(px, 1.0, 5.0)
         val fx = x.toFloat(); val fy = y.toFloat()
-        bodyPaint.shader = null
-        if (rc * s < 1.4) {
-            bodyPaint.color = withAlpha(day, 0.9f)
-            canvas.drawCircle(fx, fy, (1.4 / s).toFloat(), bodyPaint)
+        if (px < 1.2) {
+            bodyPaint.shader = null
+            bodyPaint.color = withAlpha(day, alpha)
+            canvas.drawCircle(fx, fy, (1.2 / s).toFloat(), bodyPaint)
             return
         }
         val dx = lx - x; val dy = ly - y
@@ -571,20 +604,22 @@ fun drawWheel(
             floatArrayOf(0f, 0.44f, 0.56f, 1f),
             Shader.TileMode.CLAMP,
         )
+        bodyPaint.alpha = (alpha * 255).toInt()
         canvas.drawCircle(fx, fy, rc.toFloat(), bodyPaint)
         bodyPaint.shader = null
+        bodyPaint.alpha = 255
     }
 
     // Солнце: корона + диск с потемнением к краю.
     run {
         val sunR = au * Astro.SUN_RADIUS_KM / AU_KM
         if (!onScreen(lx, ly, sunR * 8)) return@run
-        val diskR = max(sunR, 1.6 / s)
-        val glowR = max(diskR * 6, 10.0 / s)
+        val diskR = max(sunR, 1.2 / s)
+        val glowR = max(diskR * 5, 7.0 / s)
         val k = (diskR / glowR).toFloat()
         bodyPaint.shader = RadialGradient(
             lx.toFloat(), ly.toFloat(), glowR.toFloat(),
-            intArrayOf(0xFFFFE9A8.toInt(), 0x66FFC24D, 0x22FFA53A, 0x00FF9A30),
+            intArrayOf(0xFFFFE9A8.toInt(), 0x55FFC24D, 0x1AFFA53A, 0x00FF9A30),
             floatArrayOf(k * 0.9f, k * 1.1f, k * 2.2f, 1f),
             Shader.TileMode.CLAMP,
         )
@@ -600,21 +635,20 @@ fun drawWheel(
     }
 
     // Планеты.
-    for ((p, o) in planetPos) {
+    for (p in Astro.OTHER_PLANETS) {
+        val o = p.at(tm.jdNow)
         val a = tm.spaceAngle(o.lambda)
         val x = lx + cos(a) * o.r * au
         val y = ly + sin(a) * o.r * au
         val rc = au * p.radiusKm / AU_KM
-        if (p === Astro.SATURN && rc * s >= 1.4 && onScreen(x, y, rc * 2.3)) {
+        if (p === Astro.SATURN && rc * s >= 1.2 && onScreen(x, y, rc * 2.3)) {
             canvas.drawCircle(x.toFloat(), y.toFloat(), (rc * 1.75).toFloat(), Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 style = Paint.Style.STROKE
                 strokeWidth = (rc * 0.95).toFloat()
-                color = 0x55E6D3A0
+                color = withAlpha(0xFFE6D3A0.toInt(), 0.33f * fade(rc * s, 1.0, 5.0))
             })
         }
         body(x, y, rc, p.color, p.nightColor)
-        val fromSunPx = o.r * au * s
-        if (onScreen(x, y, rc) && fromSunPx > 30 && (rc * s >= 2.5 || s < 0.7)) bodyName(p.name, x, y, rc)
     }
 
     // Земля и Луна.
@@ -622,18 +656,15 @@ fun drawWheel(
         val moon = Astro.moon(tm.jdNow)
         val md = au * moon[1] / AU_KM
         val ma = tm.spaceAngle(moon[0])
-        val mx = ex + cos(ma) * md
-        val my = ey + sin(ma) * md
         val mdPx = md * s
-        if (mdPx in 14.0..8000.0) {
+        if (settings.showOrbits && mdPx in 14.0..8000.0) {
             canvas.drawCircle(ex.toFloat(), ey.toFloat(), md.toFloat(), Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 style = Paint.Style.STROKE
                 strokeWidth = (0.8 / s).toFloat()
-                color = withAlpha(WHITE, 0.08f)
+                color = withAlpha(WHITE, 0.06f)
             })
         }
-        val earthVisible = earthPx >= 1.4
-        if (earthVisible) {
+        if (diamondAlpha < 0.5f) {
             body(ex, ey, earthRc, Astro.EARTH.color, Astro.EARTH.nightColor)
             if (earthPx > 5) {
                 canvas.drawCircle(ex.toFloat(), ey.toFloat(), (earthRc * 1.035).toFloat(), Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -642,12 +673,12 @@ fun drawWheel(
                     color = 0x5580C8FF
                 })
             }
-            if (earthPx >= 3) bodyName("Земля", ex, ey, earthRc)
         }
         if (mdPx >= 14) {
-            val mrc = au * Astro.MOON_RADIUS_KM / AU_KM
-            body(mx, my, mrc, 0xFFCFCFCF.toInt(), 0xFF2A2A2E.toInt())
-            if (mdPx >= 40) bodyName("Луна", mx, my, mrc)
+            body(
+                ex + cos(ma) * md, ey + sin(ma) * md, au * Astro.MOON_RADIUS_KM / AU_KM,
+                0xFFCFCFCF.toInt(), 0xFF2A2A2E.toInt(),
+            )
         }
     }
 }

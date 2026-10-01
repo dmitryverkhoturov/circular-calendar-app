@@ -37,28 +37,54 @@ class Planet(
     private val el: DoubleArray,
     private val rate: DoubleArray,
 ) {
-    class Orbit(val a: Double, val e: Double, val peri: Double, val lambda: Double, val r: Double)
+    /** Элементы орбиты на дату (радианы). */
+    class Elements(
+        val a: Double, val e: Double, val inc: Double,
+        val node: Double, val argPeri: Double, val lMean: Double,
+    ) {
+        val peri get() = node + argPeri
+    }
+
+    class Orbit(val el: Elements, val lambda: Double, val r: Double)
+
+    fun elements(jd: Double): Elements {
+        val t = (jd - 2451545.0) / 36525.0
+        val node = (el[5] + rate[5] * t) * DEG
+        return Elements(
+            a = el[0] + rate[0] * t,
+            e = el[1] + rate[1] * t,
+            inc = (el[2] + rate[2] * t) * DEG,
+            node = node,
+            argPeri = (el[4] + rate[4] * t) * DEG - node,
+            lMean = (el[3] + rate[3] * t) * DEG,
+        )
+    }
+
+    /**
+     * Точка орбиты при истинной аномалии [nu], спроецированная на эклиптику:
+     * [out] = (x, y) в а.е. Та же проекция, что у положения планеты, —
+     * поэтому планета лежит РОВНО на нарисованной орбите.
+     */
+    fun pointAt(o: Elements, nu: Double, out: DoubleArray) {
+        val r = o.a * (1 - o.e * o.e) / (1 + o.e * cos(nu))
+        val u = o.argPeri + nu
+        val cu = cos(u); val su = sin(u)
+        val cn = cos(o.node); val sn = sin(o.node); val ci = cos(o.inc)
+        out[0] = r * (cn * cu - sn * su * ci)
+        out[1] = r * (sn * cu + cn * su * ci)
+    }
 
     /** Гелиоцентрическое положение на дату (λ — НЕ обёрнутая долгота). */
     fun at(jd: Double): Orbit {
-        val t = (jd - 2451545.0) / 36525.0
-        val a = el[0] + rate[0] * t
-        val e = el[1] + rate[1] * t
-        val inc = (el[2] + rate[2] * t) * DEG
-        val lMean = (el[3] + rate[3] * t) * DEG
-        val peri = (el[4] + rate[4] * t) * DEG
-        val node = (el[5] + rate[5] * t) * DEG
-        val m = wrapPi(lMean - peri)
-        val ea = Astro.solveKepler(m, e)
-        val xp = a * (cos(ea) - e)
-        val yp = a * sqrt(1 - e * e) * sin(ea)
-        val w = peri - node
-        val cw = cos(w); val sw = sin(w); val cn = cos(node); val sn = sin(node); val ci = cos(inc)
-        val x = (cw * cn - sw * sn * ci) * xp + (-sw * cn - cw * sn * ci) * yp
-        val y = (cw * sn + sw * cn * ci) * xp + (-sw * sn + cw * cn * ci) * yp
+        val o = elements(jd)
+        val m = wrapPi(o.lMean - o.peri)
+        val ea = Astro.solveKepler(m, o.e)
+        val nu = 2 * atan2(sqrt(1 + o.e) * sin(ea / 2), sqrt(1 - o.e) * cos(ea / 2))
+        val p = DoubleArray(2)
+        pointAt(o, nu, p)
         // Непрерывная долгота: средняя (линейна во времени) + уравнение центра.
-        val lam = lMean + wrapPi(atan2(y, x) - lMean)
-        return Orbit(a, e, peri, lam, hypot(x, y))
+        val lam = o.lMean + wrapPi(atan2(p[1], p[0]) - o.lMean)
+        return Orbit(o, lam, hypot(p[0], p[1]))
     }
 }
 
@@ -137,7 +163,10 @@ object Astro {
 /**
  * Время года ↔ угол на круге. frac — доля календарного года (0..1 текущий,
  * 1..2 следующий; можно и за пределами). Угол — в пространстве контента
- * (до поворота камеры), «сейчас» всегда на [anchor].
+ * (до поворота камеры).
+ *
+ * Что движется ([arrowMoves]): false — круг, «сейчас» всегда на [anchor];
+ * true — круг неподвижен (1 января на [anchor]), движется стрелка.
  *
  * Равномерно: угол линеен по времени. Кеплер: угол = реальная гелиоцентрическая
  * долгота Земли (быстрее в январе у перигелия), нормированная так, чтобы
@@ -148,12 +177,14 @@ class TimeMap(
     val counterClockwise: Boolean,
     val nowAtBottom: Boolean,
     val kepler: Boolean,
+    val arrowMoves: Boolean = false,
 ) {
     val year = now.year
     val yearStart: LocalDateTime = LocalDateTime.of(year, 1, 1, 0, 0)
     val totalSec = Duration.between(yearStart, LocalDateTime.of(year + 1, 1, 1, 0, 0)).seconds.toDouble()
     val totalDays = (totalSec / 86400.0 + 0.5).toInt()
-    val nowFrac = Duration.between(yearStart, now).toMillis() / 1000.0 / totalSec
+    val nowFrac = Duration.between(yearStart, now).toNanos() / 1e9 / totalSec
+    val refFrac = if (arrowMoves) 0.0 else nowFrac
     val dir = if (counterClockwise) 1.0 else -1.0
     val anchor = if (nowAtBottom) PI / 2 else -PI / 2
 
@@ -161,29 +192,32 @@ class TimeMap(
     private val daysInYear = totalSec / 86400.0
     private val lam0 = Astro.EARTH.at(jd0).lambda
     private val keplerScale = 2 * PI / (Astro.EARTH.at(jd0 + daysInYear).lambda - lam0)
-    private val lamNowK = if (kepler) keplerLam(nowFrac) else 0.0
+    private val refK = k(refFrac)
 
     val jdNow = jd0 + nowFrac * daysInYear
     val earthNow = Astro.EARTH.at(jdNow)
     /** Расстояние Земля–Солнце в а.е. для отрисовки (в равномерном режиме — 1). */
     val earthDistAu = if (kepler) earthNow.r else 1.0
 
-    private fun keplerLam(f: Double): Double =
-        (Astro.EARTH.at(jd0 + f * daysInYear).lambda - lam0) * keplerScale
+    private fun k(f: Double): Double =
+        if (kepler) (Astro.EARTH.at(jd0 + f * daysInYear).lambda - lam0) * keplerScale
+        else 2 * PI * f
 
     fun fracOf(t: LocalDateTime): Double =
         Duration.between(yearStart, t).seconds.toDouble() / totalSec
 
-    /** Угловое смещение от «сейчас» (рад, по ходу времени). */
-    fun offsetOf(f: Double): Double =
-        if (kepler) keplerLam(f) - lamNowK else 2 * PI * (f - nowFrac)
+    /** Угловое смещение от опорного момента (рад, по ходу времени). */
+    fun offsetOf(f: Double): Double = k(f) - refK
 
     fun angleOf(f: Double): Double = anchor - dir * offsetOf(f)
+
+    /** Угол стрелки «сейчас» (в режиме «движется круг» = [anchor]). */
+    val nowAngle = angleOf(nowFrac)
 
     /** Обратное к [angleOf] (ветвь, ближайшая к линейной оценке). */
     fun fracOfAngle(a: Double): Double {
         val off = dir * (anchor - a)
-        var f = nowFrac + off / (2 * PI)
+        var f = refFrac + off / (2 * PI)
         if (!kepler) return f
         repeat(4) {
             val g = offsetOf(f) - off
@@ -193,6 +227,9 @@ class TimeMap(
         return f
     }
 
-    /** Экранный угол пространственного направления с эклиптической долготой [lam]. */
-    fun spaceAngle(lam: Double): Double = anchor - dir * (lam - earthNow.lambda)
+    /** Угол контента для направления с эклиптической долготой [lam] (Земля — на стрелке). */
+    fun spaceAngle(lam: Double): Double = nowAngle - dir * (lam - earthNow.lambda)
+
+    /** Обратное к [spaceAngle]. */
+    fun lamOfAngle(a: Double): Double = earthNow.lambda + dir * (nowAngle - a)
 }

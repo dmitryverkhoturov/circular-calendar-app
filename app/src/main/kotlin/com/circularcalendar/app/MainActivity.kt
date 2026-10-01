@@ -49,9 +49,8 @@ class MainActivity : Activity() {
             if (n.minute != now.minute || n.hour != now.hour || n.dayOfYear != now.dayOfYear) {
                 now = n
                 wheel.update(settings, events, now)
-            } else if (wheel.needsFastTick()) {
-                now = n
-                wheel.setNow(now)
+            } else {
+                wheel.tickSecond()
             }
             mainHandler.postDelayed(this, 1000 - (System.currentTimeMillis() % 1000))
         }
@@ -79,6 +78,8 @@ class MainActivity : Activity() {
             calendarFilter = filter,
             largeEventsOnTop = p.getBoolean("largeTop", false),
             keplerOrbit = p.getBoolean("kepler", false),
+            showOrbits = p.getBoolean("orbits", false),
+            arrowMoves = p.getBoolean("arrowMoves", false),
         )
         val d = MotionSettings()
         motion = MotionSettings(
@@ -87,6 +88,9 @@ class MainActivity : Activity() {
             spring = p.getFloat("mSpring", d.spring.toFloat()).toDouble(),
             damping = p.getFloat("mDamping", d.damping.toFloat()).toDouble(),
             boost = p.getFloat("mBoost", d.boost.toFloat()).toDouble(),
+            rotThreshold = p.getFloat("mRotThr", d.rotThreshold.toFloat()).toDouble(),
+            rotZoomK = p.getFloat("mRotZoomK", d.rotZoomK.toFloat()).toDouble(),
+            rotCatchUp = p.getFloat("mRotCatch", d.rotCatchUp.toFloat()).toDouble(),
         )
     }
 
@@ -97,6 +101,9 @@ class MainActivity : Activity() {
             .putFloat("mSpring", motion.spring.toFloat())
             .putFloat("mDamping", motion.damping.toFloat())
             .putFloat("mBoost", motion.boost.toFloat())
+            .putFloat("mRotThr", motion.rotThreshold.toFloat())
+            .putFloat("mRotZoomK", motion.rotZoomK.toFloat())
+            .putFloat("mRotCatch", motion.rotCatchUp.toFloat())
             .apply()
     }
 
@@ -107,6 +114,8 @@ class MainActivity : Activity() {
         p.putInt("themeIdx", settings.themeIndex)
         p.putBoolean("largeTop", settings.largeEventsOnTop)
         p.putBoolean("kepler", settings.keplerOrbit)
+        p.putBoolean("orbits", settings.showOrbits)
+        p.putBoolean("arrowMoves", settings.arrowMoves)
         val ids = settings.calendarFilter.allowedIds
         if (ids == null) p.remove("calFilter")
         else p.putString("calFilter", JSONArray(ids.toList()).toString())
@@ -207,6 +216,29 @@ class MainActivity : Activity() {
         mainHandler.postDelayed(nowTicker, 1000)
 
         requestCalendarOrLoad()
+    }
+
+    // Отладочный вход: adb shell am start ... --ef zoom 500 --ef secs 0 --ef rf 1
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        if (intent.hasExtra("gest")) {
+            wheel.debugGesture(
+                intent.getStringExtra("gest") ?: "",
+                intent.getFloatExtra("x", 540f), intent.getFloatExtra("y", 1200f),
+                intent.getFloatExtra("deg", 0f),
+            )
+            wheel.postDelayed({ android.util.Log.i("CCDBG", wheel.debugState()) }, 2500)
+        }
+        if (intent.hasExtra("state")) android.util.Log.i("CCDBG", wheel.debugState())
+        if (intent.hasExtra("zoom")) {
+            wheel.post {
+                wheel.debugLook(
+                    intent.getFloatExtra("zoom", 1f).toDouble(),
+                    intent.getFloatExtra("secs", 0f).toDouble(),
+                    intent.getFloatExtra("rf", 1f).toDouble(),
+                )
+            }
+        }
     }
 
     override fun onResume() {
@@ -446,22 +478,49 @@ class MainActivity : Activity() {
         })
         space(14f)
 
+        col.addView(label("Что движется со временем"))
+        space(6f)
+        // Круг — «сейчас» всегда внизу, год прокручивается; стрелка — круг
+        // стоит, стрелка с Землёй и планеты идут сами (как часы на стене).
+        col.addView(toggle(listOf("Круг", "Стрелка"),
+            if (settings.arrowMoves) 1 else 0) { i ->
+            applySettings(settings.copy(arrowMoves = i == 1))
+        })
+        space(14f)
+
+        col.addView(label("Орбиты планет"))
+        space(6f)
+        col.addView(toggle(listOf("Скрыты", "Показаны"),
+            if (settings.showOrbits) 1 else 0) { i ->
+            applySettings(settings.copy(showOrbits = i == 1))
+        })
+        space(14f)
+
         col.addView(label("Анимация"))
         space(4f)
         col.addView(slider("Затухание инерции", motion.friction, 1.5, 20.0, "%.1f") {
-            applyMotion(MotionSettings(it, motion.launch, motion.spring, motion.damping, motion.boost))
+            applyMotion(motion.copy(friction = it))
         })
         col.addView(slider("Сила броска", motion.launch, 0.2, 2.5, "%.2f") {
-            applyMotion(MotionSettings(motion.friction, it, motion.spring, motion.damping, motion.boost))
+            applyMotion(motion.copy(launch = it))
         })
         col.addView(slider("Жёсткость пружины", motion.spring, 6.0, 45.0, "%.0f") {
-            applyMotion(MotionSettings(motion.friction, motion.launch, it, motion.damping, motion.boost))
+            applyMotion(motion.copy(spring = it))
         })
         col.addView(slider("Упругость (меньше = пружинит)", motion.damping, 0.35, 1.0, "%.2f") {
-            applyMotion(MotionSettings(motion.friction, motion.launch, motion.spring, it, motion.boost))
+            applyMotion(motion.copy(damping = it))
         })
         col.addView(slider("Разгон повторным броском", motion.boost, 0.0, 1.5, "%.2f") {
-            applyMotion(MotionSettings(motion.friction, motion.launch, motion.spring, motion.damping, it))
+            applyMotion(motion.copy(boost = it))
+        })
+        col.addView(slider("Порог вращения двумя пальцами, °", motion.rotThreshold, 0.0, 30.0, "%.0f") {
+            applyMotion(motion.copy(rotThreshold = it))
+        })
+        col.addView(slider("Рост порога при зуме, ° на ×2", motion.rotZoomK, 0.0, 80.0, "%.0f") {
+            applyMotion(motion.copy(rotZoomK = it))
+        })
+        col.addView(slider("Догон пальцев после порога", motion.rotCatchUp, 3.0, 40.0, "%.0f") {
+            applyMotion(motion.copy(rotCatchUp = it))
         })
         space(4f)
         col.addView(TextView(this).apply {

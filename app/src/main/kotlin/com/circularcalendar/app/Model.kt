@@ -59,6 +59,11 @@ class WheelSettings(
     // Орбита: false = равномерно (дни равной ширины), true = по Кеплеру
     // (реальная угловая скорость Земли, расстояние до Солнца меняется).
     val keplerOrbit: Boolean = false,
+    // Показывать орбиты планет (пасхалка, по умолчанию выключено).
+    val showOrbits: Boolean = false,
+    // Что движется со временем: false = круг (сейчас всегда внизу),
+    // true = стрелка (круг неподвижен, стрелка и планеты идут сами).
+    val arrowMoves: Boolean = false,
 ) {
     val theme: WheelTheme get() = THEMES[themeIndex.coerceIn(0, THEMES.size - 1)]
 
@@ -69,8 +74,11 @@ class WheelSettings(
         calendarFilter: CalendarFilter = this.calendarFilter,
         largeEventsOnTop: Boolean = this.largeEventsOnTop,
         keplerOrbit: Boolean = this.keplerOrbit,
+        showOrbits: Boolean = this.showOrbits,
+        arrowMoves: Boolean = this.arrowMoves,
     ) = WheelSettings(
         counterClockwise, nowAtBottom, themeIndex, calendarFilter, largeEventsOnTop, keplerOrbit,
+        showOrbits, arrowMoves,
     )
 }
 
@@ -80,7 +88,11 @@ class WheelSettings(
  * [launch] — доля скорости броска, переходящая в инерцию;
  * [spring] — жёсткость пружин (отскок от пределов, анимации зума), рад/с;
  * [damping] — демпфирование пружин (1 = без перелёта, меньше = упруже);
- * [boost] — разгон: доля текущей инерции, добавляемая повторным броском.
+ * [boost] — разгон: доля текущей инерции, добавляемая повторным броском;
+ * [rotThreshold] — порог вращения двумя пальцами (градусы поворота пальцев);
+ * [rotZoomK] — насколько порог растёт при одновременном зуме (° на каждое ×2),
+ *   чтобы пинч не крутил круг случайно;
+ * [rotCatchUp] — скорость, с которой круг «догоняет» пальцы после порога (1/с).
  */
 class MotionSettings(
     val friction: Double = 7.0,
@@ -88,7 +100,21 @@ class MotionSettings(
     val spring: Double = 22.0,
     val damping: Double = 0.8,
     val boost: Double = 0.8,
-)
+    val rotThreshold: Double = 8.0,
+    val rotZoomK: Double = 25.0,
+    val rotCatchUp: Double = 14.0,
+) {
+    fun copy(
+        friction: Double = this.friction,
+        launch: Double = this.launch,
+        spring: Double = this.spring,
+        damping: Double = this.damping,
+        boost: Double = this.boost,
+        rotThreshold: Double = this.rotThreshold,
+        rotZoomK: Double = this.rotZoomK,
+        rotCatchUp: Double = this.rotCatchUp,
+    ) = MotionSettings(friction, launch, spring, damping, boost, rotThreshold, rotZoomK, rotCatchUp)
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Послойная укладка событий в frac-пространстве (0..1 текущий год, 1..2 —

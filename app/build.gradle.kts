@@ -16,8 +16,8 @@ android {
         applicationId = "com.circularcalendar.app"
         minSdk = 29
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.7"
+        versionCode = 10
+        versionName = "0.8"
     }
 
     buildTypes {

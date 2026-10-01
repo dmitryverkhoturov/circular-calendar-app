@@ -70,6 +70,23 @@ class WheelView(context: Context) : View(context) {
     private var bands: List<EventBand> = emptyList()
     private var now: LocalDateTime = LocalDateTime.now()
     private var tm = TimeMap(now, true, true, false)
+    // Живое «сейчас» — каждый кадр (стрелка, планеты, поворот круга во времени).
+    private var tmDyn = tm
+
+    /** Доп. поворот сцены за время с её записи (режим «движется круг»). */
+    private var timeRot = 0.0
+
+    /** Поворот, с которым рисуется статичная сцена. */
+    private fun thEff() = camTh + timeRot
+
+    private fun refreshTime() {
+        val n = LocalDateTime.now()
+        tmDyn = TimeMap(n, settings.counterClockwise, settings.nowAtBottom, settings.keplerOrbit, settings.arrowMoves)
+        timeRot = if (settings.arrowMoves) 0.0 else {
+            val f = java.time.Duration.between(tm.yearStart, n).toNanos() / 1e9 / tm.totalSec
+            tm.dir * tm.offsetOf(f)
+        }
+    }
 
     // Параметры последней записи сцены.
     private var sceneDirty = true
@@ -119,16 +136,35 @@ class WheelView(context: Context) : View(context) {
     private fun boundsCorrection(out: DoubleArray): Double {
         out[0] = 0.0; out[1] = 0.0
         if (width <= 0) return 0.0
+        val g = geom()
         val m = 0.15 * min(width, height)
-        val qx = camOx.coerceIn(m, width - m)
-        val qy = camOy.coerceIn(m, height - m)
-        val dx = qx - camOx; val dy = qy - camOy
-        val d = hypot(dx, dy)
-        val r = geom().keepR * camS
-        if (d <= r) return 0.0
-        val k = (d - r) / d
-        out[0] = dx * k; out[1] = dy * k
-        return d - r
+        var best = Double.MAX_VALUE
+        // Цель удовлетворена, если её диск заходит в экран с отступом m.
+        fun target(cx: Double, cy: Double, r: Double): Boolean {
+            val qx = cx.coerceIn(m, width - m)
+            val qy = cy.coerceIn(m, height - m)
+            val dx = qx - cx; val dy = qy - cy
+            val d = hypot(dx, dy)
+            if (d <= r) return true
+            if (d - r < best) {
+                best = d - r
+                val k = (d - r) / d
+                out[0] = dx * k; out[1] = dy * k
+            }
+            return false
+        }
+        if (target(camOx, camOy, g.keepR * camS)) { out[0] = 0.0; out[1] = 0.0; return 0.0 }
+        // Планеты тоже «магнитят»: можно улететь к Юпитеру и остаться там.
+        val au = g.tipR * camS
+        for (p in Astro.OTHER_PLANETS) {
+            val o = p.at(tmDyn.jdNow)
+            val a = tmDyn.spaceAngle(o.lambda) + camTh
+            val r = o.r * au
+            if (target(camOx + cos(a) * r, camOy + sin(a) * r, au * p.radiusKm / AU_KM)) {
+                out[0] = 0.0; out[1] = 0.0; return 0.0
+            }
+        }
+        return best
     }
 
     /** Пан с резиновым сопротивлением за краем. */
@@ -227,6 +263,11 @@ class WheelView(context: Context) : View(context) {
 
     private var running = false
     private var lastFrameNanos = 0L
+    private var touching = false
+
+    // Вращение двумя пальцами: до порога круг не крутится, после — догоняет
+    // пальцы (накопленный «долг» rotBacklog гасится за ~1/rotCatchUp с).
+    private var rotBacklog = 0.0
 
     private val frameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
@@ -252,6 +293,7 @@ class WheelView(context: Context) : View(context) {
 
     private fun stopAll() {
         running = false
+        rotBacklog = 0.0
         vRot = 0.0; vPanX = 0.0; vPanY = 0.0; vZoom = 0.0
         zoomTarget = Double.NaN
         resetActive = false
@@ -265,9 +307,18 @@ class WheelView(context: Context) : View(context) {
     /** Один шаг физики. true = ещё есть движение. */
     private fun step(dt: Double): Boolean {
         if (dt <= 0) return true
+        if (rotBacklog != 0.0) {
+            val part = rotBacklog * (1 - exp(-motion.rotCatchUp * dt))
+            rotateAbout(part, rotPx, rotPy)
+            rotBacklog -= part
+            if (abs(rotBacklog) * rotR < 0.3) {
+                rotateAbout(rotBacklog, rotPx, rotPy)
+                rotBacklog = 0.0
+            }
+        }
+        if (touching) return rotBacklog != 0.0
         val fr = motion.friction
         val z = motion.damping
-        var active = false
 
         if (resetActive) {
             val g = geom()
@@ -289,6 +340,7 @@ class WheelView(context: Context) : View(context) {
             invalidate()
             return resetActive
         }
+        var active = rotBacklog != 0.0
 
         // Вращение.
         if (vRot != 0.0) {
@@ -345,11 +397,81 @@ class WheelView(context: Context) : View(context) {
         startLoop()
     }
 
+    /**
+     * Отладка (adb): навести камеру на точку круга — [secs] секунд от «сейчас»,
+     * на доле радиуса [rf] (1 = внешнее кольцо), зум [zoom], без поворота.
+     */
+    fun debugLook(zoom: Double, secs: Double, rf: Double) {
+        stopAll()
+        refreshTime()
+        val g = geom()
+        val a = tmDyn.angleOf(tmDyn.nowFrac + secs / tmDyn.totalSec)
+        val r = g.outerR * rf
+        camS = zoom; camTh = 0.0
+        camOx = width / 2.0 - zoom * cos(a) * r
+        camOy = height / 2.0 - zoom * sin(a) * r
+        sceneDirty = true
+        invalidate()
+    }
+
+    /**
+     * Отладка (adb): синтетический жест с точными метками времени — проверка
+     * логики тапов/пинча без зависимости от скорости adb input.
+     * dbl / tri / qs (двойной тап + свайп вниз) / pinch (пинч с поворотом пальцев [deg]).
+     */
+    fun debugGesture(name: String, x: Float, y: Float, deg: Float) {
+        val t0 = android.os.SystemClock.uptimeMillis()
+        val evs = ArrayList<MotionEvent>()
+        fun one(dt: Long, act: Int, px: Float, py: Float) {
+            evs.add(MotionEvent.obtain(t0, t0 + dt, act, px, py, 0))
+        }
+        fun tap(at: Long) { one(at, MotionEvent.ACTION_DOWN, x, y); one(at + 60, MotionEvent.ACTION_UP, x, y) }
+        when (name) {
+            "dbl" -> { tap(0); tap(180) }
+            "tri" -> { tap(0); tap(180); tap(360) }
+            "qs" -> {
+                tap(0)
+                one(180, MotionEvent.ACTION_DOWN, x, y)
+                for (i in 1..20) one(180 + i * 16L, MotionEvent.ACTION_MOVE, x, y + i * 12f)
+                one(180 + 21 * 16L + 200, MotionEvent.ACTION_UP, x, y + 240f)
+            }
+            "pinch" -> {
+                // Два пальца: разводятся ×2 и поворачиваются на deg градусов.
+                val props = Array(2) { MotionEvent.PointerProperties().apply { id = it; toolType = MotionEvent.TOOL_TYPE_FINGER } }
+                fun coords(k: Double): Array<MotionEvent.PointerCoords> {
+                    val r = 150.0 * (1 + k)
+                    val a = Math.toRadians(deg * k)
+                    return Array(2) { i ->
+                        val sg = if (i == 0) -1 else 1
+                        MotionEvent.PointerCoords().apply {
+                            this.x = (x + sg * r * cos(a)).toFloat(); this.y = (y + sg * r * sin(a)).toFloat()
+                            pressure = 1f; size = 1f
+                        }
+                    }
+                }
+                evs.add(MotionEvent.obtain(t0, t0, MotionEvent.ACTION_DOWN, 1, props, coords(0.0), 0, 0, 1f, 1f, 0, 0, 0, 0))
+                evs.add(MotionEvent.obtain(t0, t0 + 10, MotionEvent.ACTION_POINTER_DOWN or (1 shl 8), 2, props, coords(0.0), 0, 0, 1f, 1f, 0, 0, 0, 0))
+                for (i in 1..30) evs.add(MotionEvent.obtain(t0, t0 + 10 + i * 16L, MotionEvent.ACTION_MOVE, 2, props, coords(i / 30.0), 0, 0, 1f, 1f, 0, 0, 0, 0))
+                evs.add(MotionEvent.obtain(t0, t0 + 800, MotionEvent.ACTION_POINTER_UP or (1 shl 8), 2, props, coords(1.0), 0, 0, 1f, 1f, 0, 0, 0, 0))
+                evs.add(MotionEvent.obtain(t0, t0 + 810, MotionEvent.ACTION_UP, 1, props, coords(1.0), 0, 0, 1f, 1f, 0, 0, 0, 0))
+            }
+        }
+        // Отдаём с реальными паузами — физика и петля кадров живут в реальном времени.
+        for (ev in evs) {
+            val delay = ev.eventTime - t0
+            postDelayed({ onTouchEvent(ev); ev.recycle() }, delay)
+        }
+    }
+
+    fun debugState(): String = "s=%.4f th=%.2f° o=(%.1f, %.1f)".format(camS, Math.toDegrees(camTh), camOx, camOy)
+
     fun resetCameraAnimated() {
         stopAll()
         resetActive = true
         rsV = DoubleArray(4)
-        resetThTarget = Math.round(camTh / (2 * PI)) * 2 * PI
+        refreshTime()
+        val want = tmDyn.anchor - tmDyn.nowAngle
+        resetThTarget = camTh + Math.IEEEremainder(want - camTh, 2 * PI)
         startLoop()
     }
 
@@ -456,6 +578,11 @@ class WheelView(context: Context) : View(context) {
     private var p1x = 0.0; private var p1y = 0.0
     private var p2x = 0.0; private var p2y = 0.0
 
+    // Порог вращения пары: сколько пальцы повернули и сколько зумнули с начала.
+    private var pairRot = 0.0
+    private var pairLn = 0.0
+    private var rotUnlocked = false
+
     // Скорость пинча на момент отпускания первого пальца.
     private var pinchVel: DoubleArray? = null
     private var pinchUpTime = 0L
@@ -473,15 +600,17 @@ class WheelView(context: Context) : View(context) {
         val t = e.eventTime
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                // «Поймали» свободную инерцию (не анимацию зума/сброса) — такое
-                // касание не тап, но может разогнать следующий бросок.
+                // «Поймали» заметное кручение/панораму — такое касание не тап,
+                // но может разогнать следующий бросок. Остаточная инерция зума
+                // тапы НЕ ломает (иначе серия «двойной тап + свайп» срывалась).
                 val wasMoving = running && zoomTarget.isNaN() && !resetActive &&
-                    (vRot != 0.0 || vPanX != 0.0 || vPanY != 0.0 || vZoom != 0.0)
+                    (abs(vRot) * rotR > 150 || hypot(vPanX, vPanY) > 150)
                 carriedRot = if (wasMoving) vRot else 0.0
                 carriedPivotWheel = rotPivotWheel
                 carriedPanX = if (wasMoving) vPanX else 0.0
                 carriedPanY = if (wasMoving) vPanY else 0.0
                 stopAll()
+                touching = true
                 caught = wasMoving
                 val x = e.x.toDouble(); val y = e.y.toDouble()
                 downTime = t; downX = x; downY = y
@@ -516,6 +645,9 @@ class WheelView(context: Context) : View(context) {
                 }
                 mode = MULTI
                 initPair(e, -1)
+                if (e.pointerCount == 2) {
+                    pairRot = 0.0; pairLn = 0.0; rotUnlocked = motion.rotThreshold <= 0.0
+                }
                 pinchVel = null
                 resetSamples(t)
             }
@@ -541,13 +673,29 @@ class WheelView(context: Context) : View(context) {
                     var dTh = atan2(q2y - q1y, q2x - q1x) - atan2(p2y - p1y, p2x - p1x)
                     if (dTh > PI) dTh -= 2 * PI
                     if (dTh < -PI) dTh += 2 * PI
-                    rotateAbout(dTh, mqx, mqy)
                     var dLn = 0.0
-                    if (spanP > 1 && spanQ > 1) dLn = zoomRubber(spanQ / spanP, mqx, mqy)
-
-                    cum[0] += dTh; cum[1] += dx; cum[2] += dy; cum[3] += dLn
-                    pushSample(t)
+                    if (spanP > 1 && spanQ > 1) {
+                        pairLn += ln(spanQ / spanP)
+                        dLn = zoomRubber(spanQ / spanP, mqx, mqy)
+                    }
                     rotPivotWheel = false; rotPx = mqx; rotPy = mqy; rotR = max(spanQ / 2, 40.0)
+                    pairRot += dTh
+                    var applied = 0.0
+                    if (rotUnlocked) {
+                        rotateAbout(dTh, mqx, mqy)
+                        applied = dTh
+                    } else {
+                        // Порог растёт с зумом: пинч с лёгким поворотом пальцев не крутит.
+                        val thr = Math.toRadians(motion.rotThreshold + motion.rotZoomK * abs(pairLn) / ln(2.0))
+                        if (abs(pairRot) > thr) {
+                            rotUnlocked = true
+                            rotBacklog += pairRot // круг догоняет пальцы
+                            startLoop()
+                        }
+                    }
+
+                    cum[0] += applied; cum[1] += dx; cum[2] += dy; cum[3] += dLn
+                    pushSample(t)
                     zoomFx = mqx; zoomFy = mqy
                     p1x = q1x; p1y = q1y; p2x = q2x; p2y = q2y
                     return true
@@ -633,6 +781,7 @@ class WheelView(context: Context) : View(context) {
             }
 
             MotionEvent.ACTION_UP -> {
+                touching = false
                 val x = e.x.toDouble(); val y = e.y.toDouble()
                 val isTap = !multiSeen && !caught && maxMove < touchSlop && t - downTime < tapMaxMs
 
@@ -661,6 +810,7 @@ class WheelView(context: Context) : View(context) {
             }
 
             MotionEvent.ACTION_CANCEL -> {
+                touching = false
                 stopAll()
                 startLoop() // вернуться в пределы, если вышли
             }
@@ -701,9 +851,18 @@ class WheelView(context: Context) : View(context) {
     // ── Сцена ─────────────────────────────────────────────────────────────────
 
     fun update(settings: WheelSettings, events: List<CalendarEvent>, now: LocalDateTime) {
+        val old = this.settings
+        if (old.arrowMoves != settings.arrowMoves || old.counterClockwise != settings.counterClockwise ||
+            old.nowAtBottom != settings.nowAtBottom || old.keplerOrbit != settings.keplerOrbit
+        ) {
+            // Стрелка остаётся там же на экране — камера доворачивается.
+            val a0 = TimeMap(now, old.counterClockwise, old.nowAtBottom, old.keplerOrbit, old.arrowMoves).nowAngle
+            val a1 = TimeMap(now, settings.counterClockwise, settings.nowAtBottom, settings.keplerOrbit, settings.arrowMoves).nowAngle
+            if (old.nowAtBottom == settings.nowAtBottom) camTh += a0 - a1
+        }
         this.settings = settings
         this.now = now
-        tm = TimeMap(now, settings.counterClockwise, settings.nowAtBottom, settings.keplerOrbit)
+        tm = TimeMap(now, settings.counterClockwise, settings.nowAtBottom, settings.keplerOrbit, settings.arrowMoves)
         val filtered = events.filter { settings.calendarFilter.allows(it) }
         this.bands = buildEventBands(filtered, now.year, tm.nowFrac, settings.largeEventsOnTop)
         setBackgroundColor(settings.theme.background)
@@ -711,23 +870,17 @@ class WheelView(context: Context) : View(context) {
         invalidate()
     }
 
-    /** Сдвинуть «сейчас» без пересборки событий (частый тик на глубоком зуме). */
-    fun setNow(now: LocalDateTime) {
-        this.now = now
-        tm = TimeMap(now, settings.counterClockwise, settings.nowAtBottom, settings.keplerOrbit)
-        sceneDirty = true
-        invalidate()
-    }
+    /** Скорость видимого движения времени, экранных px/с. */
+    private fun timePxPerSec(): Double =
+        if (width <= 0) 0.0 else 2 * PI * geom().tipR * camS / tm.totalSec
 
-    /** На масштабе минут/секунд «сейчас» нужно двигать каждую секунду. */
-    fun needsFastTick(): Boolean {
-        if (width <= 0) return false
-        val pxPerSec = 2 * PI * geom().outerR * camS / tm.totalSec
-        return pxPerSec * 60 > 3
+    /** Секундный тик: перерисовать, если движение времени уже заметно. */
+    fun tickSecond() {
+        if (timePxPerSec() > 0.003) invalidate()
     }
 
     /** Что видно в экранном прямоугольнике — для LOD записи сцены. */
-    private fun computeLod(l: Double, t: Double, r: Double, b: Double, originX: Double, originY: Double): Lod {
+    private fun computeLod(l: Double, t: Double, r: Double, b: Double, originX: Double, originY: Double, th: Double): Lod {
         val s = camS
         val qx = camOx.coerceIn(l, r); val qy = camOy.coerceIn(t, b)
         val inside = qx == camOx && qy == camOy
@@ -738,7 +891,7 @@ class WheelView(context: Context) : View(context) {
         for (i in 0..3) rMax = max(rMax, hypot(cxs[i] - camOx, cys[i] - camOy))
         rMax /= s
         val visR = hypot(r - l, b - t) / 2 / s
-        val rotDeg = (camTh * 180 / PI).toFloat()
+        val rotDeg = (th * 180 / PI).toFloat()
         if (inside) {
             return Lod(s, originX, originY, rotDeg, full = true, rMin = 0.0, rMax = rMax, visR = visR, density = density)
         }
@@ -753,26 +906,26 @@ class WheelView(context: Context) : View(context) {
         val pad = (aMax - aMin) * 0.02 + 1e-9
         return Lod(
             s, originX, originY, rotDeg, full = false,
-            aLo = aMin - camTh - pad, aHi = aMax - camTh + pad,
+            aLo = aMin - th - pad, aHi = aMax - th + pad,
             rMin = rMin, rMax = rMax, visR = visR, density = density,
         )
     }
 
     /** Точка контента под экранной точкой (double). */
-    private fun contentX(qx: Double, qy: Double): Double {
+    private fun contentX(qx: Double, qy: Double, th: Double): Double {
         val dx = qx - camOx; val dy = qy - camOy
-        return width / 2.0 + (cos(camTh) * dx + sin(camTh) * dy) / camS
+        return width / 2.0 + (cos(th) * dx + sin(th) * dy) / camS
     }
 
-    private fun contentY(qx: Double, qy: Double): Double {
+    private fun contentY(qx: Double, qy: Double, th: Double): Double {
         val dx = qx - camOx; val dy = qy - camOy
-        return height / 2.0 + (-sin(camTh) * dx + cos(camTh) * dy) / camS
+        return height / 2.0 + (-sin(th) * dx + cos(th) * dy) / camS
     }
 
     /** Дельта: экран на момент записи → экран сейчас. */
     private fun computeDelta() {
         val k = camS / recS
-        val d = camTh - recTh
+        val d = thEff() - recTh
         val a = k * cos(d); val bb = k * sin(d)
         val tx = camOx - (a * recOx - bb * recOy)
         val ty = camOy - (bb * recOx + a * recOy)
@@ -786,7 +939,7 @@ class WheelView(context: Context) : View(context) {
     private fun screenInsideNode(): Boolean {
         if (nodeSize <= 0) return false
         val k = camS / recS
-        val d = camTh - recTh
+        val d = thEff() - recTh
         val c = cos(-d) / k; val sn = sin(-d) / k
         val m = 4.0
         val xs = doubleArrayOf(0.0, width.toDouble(), width.toDouble(), 0.0)
@@ -804,7 +957,7 @@ class WheelView(context: Context) : View(context) {
 
     private fun deltaNontrivial(): Boolean {
         if (abs(camS / recS - 1) > 0.005) return true
-        if (abs(camTh - recTh) > 0.003) return true
+        if (abs(thEff() - recTh) > 0.003) return true
         computeDelta()
         deltaM.getValues(tmpVals)
         return abs(tmpVals[2]) > 0.5f || abs(tmpVals[5]) > 0.5f
@@ -820,13 +973,26 @@ class WheelView(context: Context) : View(context) {
     /** Пишет сцену в [c]: локальное начало = контент под центром экрана. */
     private fun drawSceneInto(c: Canvas, l: Double, t: Double, r: Double, b: Double) {
         val w = width.toDouble(); val h = height.toDouble()
-        val ox = contentX(w / 2, h / 2)
-        val oy = contentY(w / 2, h / 2)
-        val lod = computeLod(l, t, r, b, ox, oy)
+        val th = thEff()
+        val lod = computeLod(l, t, r, b, contentX(w / 2, h / 2, th), contentY(w / 2, h / 2, th), th)
+        c.save()
+        c.translate((w / 2).toFloat(), (h / 2).toFloat())
+        c.rotate((th * 180 / PI).toFloat())
+        c.scale(camS.toFloat(), camS.toFloat())
+        drawWheel(c, width.toFloat(), height.toFloat(), tm, settings, bands, lod)
+        c.restore()
+    }
+
+    /** Динамический слой (стрелка, Солнце, планеты) — каждый кадр, живое время. */
+    private fun drawBodiesInto(c: Canvas) {
+        val w = width.toDouble(); val h = height.toDouble()
+        val lod = computeLod(0.0, 0.0, w, h, contentX(w / 2, h / 2, camTh), contentY(w / 2, h / 2, camTh), camTh)
+        c.save()
         c.translate((w / 2).toFloat(), (h / 2).toFloat())
         c.rotate((camTh * 180 / PI).toFloat())
         c.scale(camS.toFloat(), camS.toFloat())
-        drawWheel(c, width.toFloat(), height.toFloat(), tm, settings, bands, lod)
+        drawBodies(c, width.toFloat(), height.toFloat(), tmDyn, settings, lod)
+        c.restore()
     }
 
     private fun recordScene() {
@@ -846,17 +1012,17 @@ class WheelView(context: Context) : View(context) {
         } finally {
             node.endRecording()
         }
-        recS = camS; recTh = camTh; recOx = camOx; recOy = camOy
+        recS = camS; recTh = thEff(); recOx = camOx; recOy = camOy
         sceneDirty = false
     }
 
     override fun onDraw(canvas: Canvas) {
         if (width <= 0 || height <= 0) return
+        refreshTime()
 
         if (!canvas.isHardwareAccelerated) {
-            canvas.save()
             drawSceneInto(canvas, 0.0, 0.0, width.toDouble(), height.toDouble())
-            canvas.restore()
+            drawBodiesInto(canvas)
             return
         }
 
@@ -872,6 +1038,10 @@ class WheelView(context: Context) : View(context) {
             canvas.drawRenderNode(node)
             canvas.restore()
         }
+        drawBodiesInto(canvas)
+
+        // На глубоком зуме время видно глазом — плавно, каждый кадр.
+        if (timePxPerSec() > 0.05) postInvalidateOnAnimation()
     }
 
     override fun onDetachedFromWindow() {
