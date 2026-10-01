@@ -56,6 +56,9 @@ class WheelSettings(
     // true = «сверху» — иерархия длительности: из двух пересекающихся
     // более длинное уходит дальше от кольца, короткие остаются у кольца.
     val largeEventsOnTop: Boolean = false,
+    // Орбита: false = равномерно (дни равной ширины), true = по Кеплеру
+    // (реальная угловая скорость Земли, расстояние до Солнца меняется).
+    val keplerOrbit: Boolean = false,
 ) {
     val theme: WheelTheme get() = THEMES[themeIndex.coerceIn(0, THEMES.size - 1)]
 
@@ -65,8 +68,27 @@ class WheelSettings(
         themeIndex: Int = this.themeIndex,
         calendarFilter: CalendarFilter = this.calendarFilter,
         largeEventsOnTop: Boolean = this.largeEventsOnTop,
-    ) = WheelSettings(counterClockwise, nowAtBottom, themeIndex, calendarFilter, largeEventsOnTop)
+        keplerOrbit: Boolean = this.keplerOrbit,
+    ) = WheelSettings(
+        counterClockwise, nowAtBottom, themeIndex, calendarFilter, largeEventsOnTop, keplerOrbit,
+    )
 }
+
+/**
+ * Параметры анимации — крутятся ползунками в настройках.
+ * [friction] — затухание инерции (1/с, больше = быстрее останавливается);
+ * [launch] — доля скорости броска, переходящая в инерцию;
+ * [spring] — жёсткость пружин (отскок от пределов, анимации зума), рад/с;
+ * [damping] — демпфирование пружин (1 = без перелёта, меньше = упруже);
+ * [boost] — разгон: доля текущей инерции, добавляемая повторным броском.
+ */
+class MotionSettings(
+    val friction: Double = 7.0,
+    val launch: Double = 1.0,
+    val spring: Double = 22.0,
+    val damping: Double = 0.8,
+    val boost: Double = 0.8,
+)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Послойная укладка событий в frac-пространстве (0..1 текущий год, 1..2 —
@@ -78,6 +100,10 @@ class EventBand(
     val startFrac: Double,
     val endFrac: Double,
     var layer: Int = 0,
+    // Короткие (< дня) пересекающиеся события живут в одном ряду: ряд режется
+    // по радиусу на [lanes] дорожек, событие — в дорожке [lane] (0 = у кольца).
+    var lane: Int = 0,
+    var lanes: Int = 1,
 )
 
 /** Граница «крупного» события: занимает на круге не меньше суток. */
@@ -123,7 +149,41 @@ fun buildEventBands(
         }
     }
 
-    if (largeOnTop) assignLayersByDuration(bands) else assignLayers(bands)
+    // Короткие пересекающиеся — в один ряд: кластер укладывается как одно
+    // целое (интервал-объединение), внутри кластера — дорожки по радиусу.
+    val units = ArrayList<EventBand>()
+    val members = HashMap<EventBand, List<EventBand>>()
+    val small = bands.filter { it.endFrac - it.startFrac < LARGE_BAND_FRAC }
+        .sortedBy { it.startFrac }
+    bands.filterTo(units) { it.endFrac - it.startFrac >= LARGE_BAND_FRAC }
+    var i = 0
+    while (i < small.size) {
+        var j = i + 1
+        var end = small[i].endFrac
+        while (j < small.size && small[j].startFrac < end - 1e-12) {
+            if (small[j].endFrac > end) end = small[j].endFrac
+            j++
+        }
+        val cluster = small.subList(i, j)
+        if (cluster.size == 1) {
+            units.add(cluster[0])
+        } else {
+            val laneEnds = ArrayList<Double>()
+            for (b in cluster) {
+                var l = laneEnds.indexOfFirst { it <= b.startFrac + 1e-12 }
+                if (l < 0) { laneEnds.add(b.endFrac); l = laneEnds.size - 1 } else laneEnds[l] = b.endFrac
+                b.lane = l
+            }
+            for (b in cluster) b.lanes = laneEnds.size
+            val proxy = EventBand(cluster[0].event, cluster[0].startFrac, end)
+            members[proxy] = cluster.toList()
+            units.add(proxy)
+        }
+        i = j
+    }
+
+    if (largeOnTop) assignLayersByDuration(units) else assignLayers(units)
+    for ((proxy, list) in members) for (b in list) b.layer = proxy.layer
     return bands
 }
 

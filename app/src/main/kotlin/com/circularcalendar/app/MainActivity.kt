@@ -11,6 +11,7 @@ import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.SeekBar
 import android.widget.ScrollView
 import android.widget.TextView
 import org.json.JSONArray
@@ -38,12 +39,21 @@ class MainActivity : Activity() {
     private val density: Float get() = resources.displayMetrics.density
     private fun dp(v: Float): Int = (v * density + 0.5f).toInt()
 
-    // Обновление «сейчас» раз в минуту — стрелка не зависает.
+    private var motion = MotionSettings()
+
+    // Тик «сейчас»: раз в минуту полная пересборка; на масштабе минут/секунд
+    // стрелка двигается каждую секунду (без пересборки событий).
     private val nowTicker = object : Runnable {
         override fun run() {
-            now = LocalDateTime.now()
-            wheel.update(settings, events, now)
-            mainHandler.postDelayed(this, 60_000)
+            val n = LocalDateTime.now()
+            if (n.minute != now.minute || n.hour != now.hour || n.dayOfYear != now.dayOfYear) {
+                now = n
+                wheel.update(settings, events, now)
+            } else if (wheel.needsFastTick()) {
+                now = n
+                wheel.setNow(now)
+            }
+            mainHandler.postDelayed(this, 1000 - (System.currentTimeMillis() % 1000))
         }
     }
 
@@ -68,7 +78,26 @@ class MainActivity : Activity() {
             themeIndex = p.getInt("themeIdx", 0).coerceIn(0, THEMES.size - 1),
             calendarFilter = filter,
             largeEventsOnTop = p.getBoolean("largeTop", false),
+            keplerOrbit = p.getBoolean("kepler", false),
         )
+        val d = MotionSettings()
+        motion = MotionSettings(
+            friction = p.getFloat("mFriction", d.friction.toFloat()).toDouble(),
+            launch = p.getFloat("mLaunch", d.launch.toFloat()).toDouble(),
+            spring = p.getFloat("mSpring", d.spring.toFloat()).toDouble(),
+            damping = p.getFloat("mDamping", d.damping.toFloat()).toDouble(),
+            boost = p.getFloat("mBoost", d.boost.toFloat()).toDouble(),
+        )
+    }
+
+    private fun saveMotion() {
+        getSharedPreferences("settings", MODE_PRIVATE).edit()
+            .putFloat("mFriction", motion.friction.toFloat())
+            .putFloat("mLaunch", motion.launch.toFloat())
+            .putFloat("mSpring", motion.spring.toFloat())
+            .putFloat("mDamping", motion.damping.toFloat())
+            .putFloat("mBoost", motion.boost.toFloat())
+            .apply()
     }
 
     private fun saveSettings() {
@@ -77,31 +106,26 @@ class MainActivity : Activity() {
         p.putBoolean("nowBottom", settings.nowAtBottom)
         p.putInt("themeIdx", settings.themeIndex)
         p.putBoolean("largeTop", settings.largeEventsOnTop)
+        p.putBoolean("kepler", settings.keplerOrbit)
         val ids = settings.calendarFilter.allowedIds
         if (ids == null) p.remove("calFilter")
         else p.putString("calFilter", JSONArray(ids.toList()).toString())
         p.apply()
     }
 
-    // Камера (зум/поворот/пан) переживает рестарт: "w,h,9 значений матрицы".
+    // Камера (зум/поворот/пан) переживает рестарт; при восстановлении
+    // возвращается в пределы — календарь не потеряется за краем.
     private fun saveCamera() {
         if (wheel.width <= 0 || wheel.height <= 0) return
-        val v = wheel.cameraValues()
         getSharedPreferences("settings", MODE_PRIVATE).edit()
-            .putString("camera", "${wheel.width},${wheel.height}," + v.joinToString(","))
+            .putString("camera2", wheel.cameraState())
             .apply()
     }
 
     private fun restoreCamera() {
         val s = getSharedPreferences("settings", MODE_PRIVATE)
-            .getString("camera", null) ?: return
-        try {
-            val parts = s.split(',')
-            if (parts.size != 11) return
-            val vals = FloatArray(9) { parts[it + 2].toFloat() }
-            wheel.setPendingCamera(vals, parts[0].toInt(), parts[1].toInt())
-        } catch (_: Exception) {
-        }
+            .getString("camera2", null) ?: return
+        wheel.restoreCameraState(s)
     }
 
     private fun applySettings(s: WheelSettings) {
@@ -135,6 +159,7 @@ class MainActivity : Activity() {
         root = FrameLayout(this)
 
         wheel = WheelView(this)
+        wheel.motion = motion
         root.addView(wheel, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
 
@@ -179,7 +204,7 @@ class MainActivity : Activity() {
         events = buildMockEvents(now.year)
         restoreCamera()
         wheel.update(settings, events, now)
-        mainHandler.postDelayed(nowTicker, 60_000)
+        mainHandler.postDelayed(nowTicker, 1000)
 
         requestCalendarOrLoad()
     }
@@ -258,7 +283,7 @@ class MainActivity : Activity() {
             val v = buildPanel()
             panel = v
             overlay.addView(v, FrameLayout.LayoutParams(
-                dp(240f), FrameLayout.LayoutParams.WRAP_CONTENT).apply {
+                dp(272f), FrameLayout.LayoutParams.WRAP_CONTENT).apply {
                 gravity = Gravity.BOTTOM or Gravity.START
                 leftMargin = dp(8f); bottomMargin = dp(52f)
             })
@@ -324,6 +349,59 @@ class MainActivity : Activity() {
         layoutParams = LinearLayout.LayoutParams(dp(sizeDp), dp(sizeDp))
     }
 
+    private fun applyMotion(m: MotionSettings) {
+        motion = m
+        wheel.motion = m
+        saveMotion()
+    }
+
+    /** Ползунок: подпись + значение, линейная шкала [lo, hi]. */
+    private fun slider(
+        title: String, value: Double, lo: Double, hi: Double, fmt: String,
+        onChange: (Double) -> Unit,
+    ): View {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(4f), 0, 0)
+        }
+        val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        head.addView(TextView(this).apply {
+            text = title
+            textSize = 11f
+            setTextColor(withAlpha(WHITE, 0.65f))
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        val valueView = TextView(this).apply {
+            text = fmt.format(value)
+            textSize = 11f
+            setTextColor(withAlpha(WHITE, 0.85f))
+        }
+        head.addView(valueView)
+        box.addView(head)
+        val steps = 1000
+        box.addView(SeekBar(this).apply {
+            max = steps
+            progress = (((value - lo) / (hi - lo)) * steps).toInt().coerceIn(0, steps)
+            val tint = android.content.res.ColorStateList.valueOf(settings.theme.accent)
+            progressTintList = tint
+            thumbTintList = tint
+            progressBackgroundTintList = android.content.res.ColorStateList.valueOf(withAlpha(WHITE, 0.25f))
+            setPadding(dp(6f), dp(6f), dp(6f), dp(6f))
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar, p: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    val v = lo + (hi - lo) * p / steps
+                    valueView.text = fmt.format(v)
+                    onChange(v)
+                }
+                override fun onStartTrackingTouch(sb: SeekBar) {}
+                override fun onStopTrackingTouch(sb: SeekBar) {}
+            })
+        }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT))
+        return box
+    }
+
     private fun buildPanel(): View {
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -356,6 +434,50 @@ class MainActivity : Activity() {
             if (settings.largeEventsOnTop) 1 else 0) { i ->
             applySettings(settings.copy(largeEventsOnTop = i == 1))
         })
+        space(14f)
+
+        col.addView(label("Орбита Земли"))
+        space(6f)
+        // Равномерно — все дни одной ширины; Кеплер — реальная скорость Земли:
+        // у перигелия (январь) дни шире, Земля и стрелка ближе к Солнцу.
+        col.addView(toggle(listOf("Равномерно", "Кеплер"),
+            if (settings.keplerOrbit) 1 else 0) { i ->
+            applySettings(settings.copy(keplerOrbit = i == 1))
+        })
+        space(14f)
+
+        col.addView(label("Анимация"))
+        space(4f)
+        col.addView(slider("Затухание инерции", motion.friction, 1.5, 20.0, "%.1f") {
+            applyMotion(MotionSettings(it, motion.launch, motion.spring, motion.damping, motion.boost))
+        })
+        col.addView(slider("Сила броска", motion.launch, 0.2, 2.5, "%.2f") {
+            applyMotion(MotionSettings(motion.friction, it, motion.spring, motion.damping, motion.boost))
+        })
+        col.addView(slider("Жёсткость пружины", motion.spring, 6.0, 45.0, "%.0f") {
+            applyMotion(MotionSettings(motion.friction, motion.launch, it, motion.damping, motion.boost))
+        })
+        col.addView(slider("Упругость (меньше = пружинит)", motion.damping, 0.35, 1.0, "%.2f") {
+            applyMotion(MotionSettings(motion.friction, motion.launch, motion.spring, it, motion.boost))
+        })
+        col.addView(slider("Разгон повторным броском", motion.boost, 0.0, 1.5, "%.2f") {
+            applyMotion(MotionSettings(motion.friction, motion.launch, motion.spring, motion.damping, it))
+        })
+        space(4f)
+        col.addView(TextView(this).apply {
+            text = "Анимация по умолчанию"
+            textSize = 11f
+            gravity = Gravity.CENTER
+            setPadding(0, dp(5f), 0, dp(5f))
+            setTextColor(withAlpha(WHITE, 0.55f))
+            background = roundedBg(withAlpha(WHITE, 0.04f), 6f, strokeColor = withAlpha(WHITE, 0.08f))
+            setOnClickListener {
+                applyMotion(MotionSettings())
+                rebuildPanelIfOpen()
+            }
+        }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT))
         space(14f)
 
         col.addView(label("Тема"))
