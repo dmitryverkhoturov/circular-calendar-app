@@ -50,7 +50,7 @@ class CalendarFilter(val allowedIds: Set<String>? = null) {
 class WheelSettings(
     val counterClockwise: Boolean = true,
     val nowAtBottom: Boolean = true,
-    val themeIndex: Int = 0,
+    val design: Design = Design(),
     val calendarFilter: CalendarFilter = CalendarFilter(),
     // Крупные события: false = «снизу», у кольца дней (укладка как в v0.4);
     // true = «сверху» — иерархия длительности: из двух пересекающихся
@@ -65,19 +65,19 @@ class WheelSettings(
     // true = стрелка (круг неподвижен, стрелка и планеты идут сами).
     val arrowMoves: Boolean = false,
 ) {
-    val theme: WheelTheme get() = THEMES[themeIndex.coerceIn(0, THEMES.size - 1)]
+    val look: Look by lazy { Look(design) }
 
     fun copy(
         counterClockwise: Boolean = this.counterClockwise,
         nowAtBottom: Boolean = this.nowAtBottom,
-        themeIndex: Int = this.themeIndex,
+        design: Design = this.design,
         calendarFilter: CalendarFilter = this.calendarFilter,
         largeEventsOnTop: Boolean = this.largeEventsOnTop,
         keplerOrbit: Boolean = this.keplerOrbit,
         showOrbits: Boolean = this.showOrbits,
         arrowMoves: Boolean = this.arrowMoves,
     ) = WheelSettings(
-        counterClockwise, nowAtBottom, themeIndex, calendarFilter, largeEventsOnTop, keplerOrbit,
+        counterClockwise, nowAtBottom, design, calendarFilter, largeEventsOnTop, keplerOrbit,
         showOrbits, arrowMoves,
     )
 }

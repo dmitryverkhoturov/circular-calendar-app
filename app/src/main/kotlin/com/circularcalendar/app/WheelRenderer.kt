@@ -37,6 +37,10 @@ private val MONTHS_RU = arrayOf(
     "Янв", "Фев", "Мар", "Апр", "Май", "Июн",
     "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек",
 )
+private val MONTHS_FULL = arrayOf(
+    "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
+)
 private val MONTHS_GEN = arrayOf(
     "янв", "фев", "мар", "апр", "мая", "июн",
     "июл", "авг", "сен", "окт", "ноя", "дек",
@@ -107,16 +111,20 @@ fun drawWheel(
     bands: List<EventBand>,
     lod: Lod,
 ) {
-    val th = settings.theme
+    val lk = settings.look
+    val ds = lk.d
     val g = WheelGeom(width, height)
     val s = lod.camScale
     val sF = s.toFloat()
     val unit = g.unit
     val outerR = g.outerR
-    val dens = lod.density
+    val holeR = lk.holeR * outerR
     // Центр круга в локальных координатах.
     val lx = g.cx - lod.originX
     val ly = g.cy - lod.originY
+    val rotRad = lod.rotDeg * PI / 180.0
+    // Свечение — в экранных px (в локальных единицах делим на зум).
+    val glowLocal = (ds.glow * 16.0 * lod.density / 2.75 / s).toFloat()
 
     fun px(a: Double, r: Double): Float = (lx + cos(a) * r).toFloat()
     fun py(a: Double, r: Double): Float = (ly + sin(a) * r).toFloat()
@@ -161,11 +169,35 @@ fun drawWheel(
         return clip(a - eps, a + eps) != null
     }
 
+    // Тонкие линии рисуем в ЭКРАННЫХ пикселях (координаты × зум, холст
+    // масштабирован обратно), как подписи. В локальных единицах на зуме 10⁵
+    // ширина линии ~1e-5 — мобильные GPU считают с пониженной точностью,
+    // и деления «плыли» и пропадали (на эмуляторе точности хватало).
     fun radial(a: Double, r0: Double, r1: Double, p: Paint) {
         val ra = max(r0, lod.rMin - 2.0 / s)
         val rb = min(r1, lod.rMax + 2.0 / s)
         if (ra >= rb || !angleVisible(a)) return
-        canvas.drawLine(px(a, ra), py(a, ra), px(a, rb), py(a, rb), p)
+        val w = p.strokeWidth
+        p.strokeWidth = w * sF
+        canvas.save()
+        canvas.scale(1f / sF, 1f / sF)
+        canvas.drawLine(
+            ((lx + cos(a) * ra) * s).toFloat(), ((ly + sin(a) * ra) * s).toFloat(),
+            ((lx + cos(a) * rb) * s).toFloat(), ((ly + sin(a) * rb) * s).toFloat(), p,
+        )
+        canvas.restore()
+        p.strokeWidth = w
+    }
+
+    /** Обводка пути, построенного в экранных px (см. [radial]). */
+    fun strokeScreen(path: Path, p: Paint) {
+        val w = p.strokeWidth
+        p.strokeWidth = w * sF
+        canvas.save()
+        canvas.scale(1f / sF, 1f / sF)
+        canvas.drawPath(path, p)
+        canvas.restore()
+        p.strokeWidth = w
     }
 
     // Экранная толщина линий почти постоянна: растёт с зумом лишь как
@@ -177,28 +209,41 @@ fun drawWheel(
 
     fun fade(v: Double, lo: Double, hi: Double): Float = ((v - lo) / (hi - lo)).coerceIn(0.0, 1.0).toFloat()
 
-    val textRotOffset = if (settings.nowAtBottom) -PI / 2 else PI / 2
+    /** Полная окружность радиуса [r] (только видимая часть). */
+    fun ringPath(r: Double): Path? {
+        if (r < lod.rMin - 4 / s || r > lod.rMax + 4 / s) return null
+        val c = clip(0.0, 2 * PI) ?: return null
+        val path = Path()
+        arcPoly(path, lx * s, ly * s, r * s, c[0], c[1], 1.0, true) // экранные px
+        return path
+    }
+
+    // Подписи всегда читаются: внизу экрана — «лицом» как есть, вверху —
+    // переворачиваются (решается по экранному углу на момент записи сцены).
+    fun onBottom(a: Double) = sin(a + rotRad) >= 0
+    fun textRot(a: Double) = if (onBottom(a)) a - PI / 2 else a + PI / 2
+
     val textPaint = Paint(
         Paint.ANTI_ALIAS_FLAG or Paint.LINEAR_TEXT_FLAG or Paint.SUBPIXEL_TEXT_FLAG,
     ).apply { textAlign = Paint.Align.CENTER }
-    val mediumFace = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+    val face = lk.typeface
+    val digitH = digitHeight(face)
 
-    /** Подпись вдоль окружности с ЭКРАННЫМ кеглем [sizePx]. */
-    val digitH = DIGIT_H
-
+    /** Подпись (прямая) по касательной с ЭКРАННЫМ кеглем [sizePx]. */
     fun label(
         text: String, a: Double, r: Double, sizePx: Float, color: Int,
-        medium: Boolean = false, digits: Boolean = false,
+        digits: Boolean = false,
     ) {
         if (sizePx < 2.5f) return
         val reach = sizePx * 3 / s
         if (r < lod.rMin - reach || r > lod.rMax + reach) return
         textPaint.textSize = sizePx
         textPaint.color = color
-        textPaint.typeface = if (medium) mediumFace else Typeface.DEFAULT
+        textPaint.typeface = face
+        textPaint.letterSpacing = 0f
         canvas.save()
         canvas.translate(px(a, r), py(a, r))
-        canvas.rotate(deg(a + textRotOffset))
+        canvas.rotate(deg(textRot(a)))
         canvas.scale(1f / sF, 1f / sF)
         // Цифры центрируются по их реальной высоте (ряды встают точно).
         val y = if (digits) (digitH * sizePx / 2).toFloat()
@@ -207,19 +252,54 @@ fun drawWheel(
         canvas.restore()
     }
 
+    /** Подпись, изогнутая по дуге радиуса [r] (кегль в единицах круга). */
+    fun arcLabel(text: String, a: Double, r: Double, size: Double, color: Int) {
+        if (size * s < 2.5) return
+        if (r < lod.rMin - size * 3 || r > lod.rMax + size * 3) return
+        textPaint.textSize = size.toFloat()
+        textPaint.color = color
+        textPaint.typeface = face
+        textPaint.letterSpacing = lk.font.spacing
+        textPaint.textAlign = Paint.Align.LEFT
+        val w = textPaint.measureText(text).toDouble()
+        val span = w / r
+        val path = Path()
+        if (onBottom(a)) arcPoly(path, lx, ly, r, a + span / 2, a - span / 2, s, true)
+        else arcPoly(path, lx, ly, r, a - span / 2, a + span / 2, s, true)
+        canvas.drawTextOnPath(text, path, 0f, -(textPaint.ascent() + textPaint.descent()) / 2f, textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
+        textPaint.letterSpacing = 0f
+    }
+
     val nowFrac = tm.nowFrac
     val totalSec = tm.totalSec
     val pxPerSec = 2.0 * PI * outerR * s / totalSec
     val pxPerDay = pxPerSec * 86400.0
 
-    // ═════ Слой круга: заливка + радиальные риски, с маской внутреннего кольца ═
-    val needMask = lod.rMin < g.fadeEndR
+    // ── Объём: мягкая тень под кругом (видна только у края) ─────────────────
+    if (ds.volume > 0f && lod.rMax > outerR * 0.8 && s < 40) {
+        val off = (12.0 * unit * ds.volume).toFloat()
+        val rr = (outerR * 1.12).toFloat()
+        val a = (0.55f * ds.volume * (if (lk.dark) 1f else 0.45f))
+        canvas.drawCircle(lx.toFloat(), ly.toFloat() + off, rr, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            shader = RadialGradient(
+                lx.toFloat(), ly.toFloat() + off, rr,
+                intArrayOf(0, 0, withAlpha(if (lk.dark) BLACK else mix(lk.accent, BLACK, 0.5f), a), 0),
+                floatArrayOf(0f, 0.74f, 0.82f, 1f), Shader.TileMode.CLAMP,
+            )
+        })
+    }
+
+    // ═════ Слой круга: заливка + радиальные риски, с маской дырки/градиента ═══
+    val gradOn = ds.ring || ds.grad < 0.999f
+    val maskEnd = holeR + (outerR - holeR) * 0.92
+    val needMask = gradOn && lod.rMin < maskEnd
     if (needMask) {
         val b = (outerR + 4 * unit).toFloat()
         canvas.saveLayer(lx.toFloat() - b, ly.toFloat() - b, lx.toFloat() + b, ly.toFloat() + b, null)
     }
 
-    // ── Заливка секторов по месяцам ──────────────────────────────────────────
+    // ── Заливка: один цвет на весь круг (прошлое — по ручке «Прошлое темнее») ─
     val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     val slicePath = Path()
     fun drawSlice(f0: Double, f1: Double, color: Int) {
@@ -241,21 +321,9 @@ fun drawWheel(
     fun monthFrac(m: Int): Double =
         if (m <= 12) tm.fracOf(java.time.LocalDateTime.of(year, m, 1, 0, 0)) else 1.0
 
-    for (m in 1..12) {
-        val f0 = monthFrac(m)
-        val f1 = monthFrac(m + 1)
-        val odd = m % 2 == 1
-        val cPast = if (odd) th.bandPastOdd else th.bandPastEven
-        val cFuture = if (odd) th.bandFutureOdd else th.bandFutureEven
-        when {
-            f1 <= nowFrac -> drawSlice(f0, f1, cPast)
-            f0 >= nowFrac -> drawSlice(f0, f1, cFuture)
-            else -> {
-                drawSlice(f0, nowFrac, cPast)
-                drawSlice(nowFrac, f1, cFuture)
-            }
-        }
-    }
+    // Год целиком: прошлое (до «сейчас») и будущее; без чередования месяцев.
+    drawSlice(0.0, nowFrac, lk.sectorPast)
+    drawSlice(nowFrac, 1.0, lk.sectorFuture)
 
     // ── LOD-лестница рисок: недели → дни → часы → минуты → секунды ─────────
     // Порог появления — экранное расстояние между соседними рисками вида.
@@ -270,57 +338,63 @@ fun drawWheel(
         strokeWidth = w
     }
 
-    /** Риски с шагом [step] сек; кратные [skip] пропускаются (их рисует крупный вид). */
-    fun timeTicks(step: Long, skip: Long, p: Paint) {
-        val k0 = ceil(fLo * totalSec / step).toLong()
-        val k1 = floor(fHi * totalSec / step).toLong()
-        if (k1 - k0 > 6000) return
-        for (k in k0..k1) {
-            val sec = k * step
-            if (skip > 0 && Math.floorMod(sec, skip) == 0L) continue
-            radial(tm.angleOf(sec / totalSec), 0.0, outerR, p)
-        }
-    }
-
-    if (weekVis > 0f) {
-        val p = tickPaint(th.weekLineColor, th.weekLineAlpha * weekVis, lineW(th.weekLineWidth.toDouble()))
-        val k0 = ceil(fLo * totalSec / 86400).toLong()
-        val k1 = floor(fHi * totalSec / 86400).toLong()
-        val dow0 = tm.yearStart.dayOfWeek.value - 1 // 0 = понедельник
-        for (k in k0..k1) {
-            if (Math.floorMod(dow0 + k, 7L) != 0L) continue
-            radial(tm.angleOf(k * 86400.0 / totalSec), 0.0, outerR, p)
-        }
-    }
-    if (dayVis > 0f) timeTicks(86400, 0, tickPaint(th.dayTickColor, th.dayTickAlpha * dayVis, lineW(0.3)))
-    if (hourVis > 0f) timeTicks(3600, 86400, tickPaint(th.dayTickColor, th.dayTickAlpha * 0.8f * hourVis, lineW(0.175)))
-    if (minVis > 0f) timeTicks(60, 3600, tickPaint(th.dayTickColor, th.dayTickAlpha * 0.7f * minVis, lineW(0.12)))
-    if (secVis > 0f) timeTicks(1, 60, tickPaint(th.dayTickColor, th.dayTickAlpha * 0.6f * secVis, lineW(0.08)))
+    val line = lk.line
+    val ta = lk.tickAlpha
 
     // ── Границы месяцев, астро-линии, сезоны ────────────────────────────────
-    val monthLinePaint = tickPaint(th.monthLineColor, th.monthLineAlpha, lineW(th.monthLineWidth.toDouble(), 1.0))
-    for (m in 1..12) radial(tm.angleOf(monthFrac(m)), 0.0, outerR, monthLinePaint)
+    if (lk.monthAlpha > 0f) {
+        val monthLinePaint = tickPaint(line, lk.monthAlpha, lineW(1.6, 1.0))
+        for (m in 1..12) radial(tm.angleOf(monthFrac(m)), 0.0, outerR, monthLinePaint)
+    }
 
-    val astroPaint = tickPaint(th.astroLineColor, th.astroLineAlpha, lineW(th.astroLineWidth.toDouble()))
+    val astroPaint = tickPaint(lk.astroColor, 0.5f, lineW(0.7))
     for ((m, day) in listOf(3 to 20, 6 to 21, 9 to 22, 12 to 21)) {
         radial(tm.angleOf(tm.fracOf(java.time.LocalDateTime.of(year, m, day, 0, 0))), 0.0, outerR, astroPaint)
     }
 
-    val seasonPaint = tickPaint(th.seasonLineColor, th.seasonLineAlpha, lineW(th.seasonLineWidth.toDouble(), 1.2))
+    val seasonPaint = tickPaint(line, lk.seasonAlpha, lineW(2.8, 1.2))
     for (m in listOf(3, 6, 9, 12)) radial(tm.angleOf(monthFrac(m)), 0.0, outerR, seasonPaint)
 
-    // ── Маска: внутри внутреннего кольца пусто, дальше — мягкий градиент ────
-    if (needMask) {
-        val inner = (g.innerR / g.fadeEndR).toFloat()
-        val span = 1f - inner
-        val maskPaint = Paint().apply {
-            // smoothstep: 0 → 1 между innerR и fadeEndR.
+    // ── Объём: блик сверху-слева (под маской — в дырке его нет) ─────────────
+    if (ds.volume > 0f && lod.rMax > holeR && s < 40) {
+        val hx = (lx - outerR * 0.45).toFloat(); val hy = (ly - outerR * 0.55).toFloat()
+        val hr = (outerR * 1.35).toFloat()
+        canvas.drawCircle(lx.toFloat(), ly.toFloat(), outerR.toFloat(), Paint(Paint.ANTI_ALIAS_FLAG).apply {
             shader = RadialGradient(
-                lx.toFloat(), ly.toFloat(), g.fadeEndR.toFloat(),
-                intArrayOf(0, 0, 0x29000000, 0x80000000.toInt(), 0xD6000000.toInt(), 0xFF000000.toInt()),
-                floatArrayOf(0f, inner, inner + span * 0.25f, inner + span * 0.5f, inner + span * 0.75f, 1f),
-                Shader.TileMode.CLAMP,
+                hx, hy, hr, intArrayOf(withAlpha(WHITE, 0.15f * ds.volume), 0), null, Shader.TileMode.CLAMP,
             )
+        })
+    }
+
+    // ── Маска: дырка в центре + градиент от неё к краю ──────────────────────
+    if (needMask) {
+        val hk = (holeR / maskEnd).toFloat()
+        val gr = ds.grad.coerceIn(0f, 1f)
+        fun al(v: Float) = ((v.coerceIn(0f, 1f) * 255f + 0.5f).toInt() shl 24)
+        val colors: IntArray
+        val pos: FloatArray
+        if (ds.ring) {
+            colors = intArrayOf(0, 0, al(gr), al(gr + (1 - gr) * 0.6f), al(1f))
+            pos = floatArrayOf(0f, hk * 0.995f, hk, hk + (1 - hk) * 0.55f, 1f)
+        } else {
+            colors = intArrayOf(al(gr), al(gr + (1 - gr) * 0.6f), al(1f))
+            pos = floatArrayOf(0f, 0.55f, 1f)
+        }
+        val maskPaint = Paint().apply {
+            if (lod.rMax - lod.rMin < outerR * 0.02) {
+                // Глубокий зум: градиент на экране неразличим, а float-шейдер
+                // с центром за тысячи экранов даёт пятна — берём ровную альфу.
+                val t = (((lod.rMin + lod.rMax) / 2) / maskEnd).toFloat().coerceIn(0f, 1f)
+                var a = 1f
+                for (i in 1 until pos.size) if (t <= pos[i]) {
+                    val k = ((t - pos[i - 1]) / max(pos[i] - pos[i - 1], 1e-6f)).coerceIn(0f, 1f)
+                    val a0 = (colors[i - 1] ushr 24) / 255f; val a1 = (colors[i] ushr 24) / 255f
+                    a = a0 + (a1 - a0) * k; break
+                }
+                color = withAlpha(BLACK, a)
+            } else {
+                shader = RadialGradient(lx.toFloat(), ly.toFloat(), maskEnd.toFloat(), colors, pos, Shader.TileMode.CLAMP)
+            }
             xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
         }
         val b = (outerR + 4 * unit).toFloat()
@@ -328,18 +402,57 @@ fun drawWheel(
         canvas.restore()
     }
 
-    // ── Контур — внешний круг (снаружи чёткий край) ─────────────────────────
-    run {
-        val c = clip(0.0, 2 * PI)
-        if (c != null && outerR >= lod.rMin - 4 / s && outerR <= lod.rMax + 4 / s) {
-            val path = Path()
-            arcPoly(path, lx, ly, outerR, c[0], c[1], s, true)
-            canvas.drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                style = Paint.Style.STROKE
-                strokeWidth = lineW(th.ringWidth.toDouble())
-                color = withAlpha(th.ringColor, th.ringAlpha)
+    // ── Лучи по дням: длина = занятость дня, наложения темнее/светлее ───────
+    if (ds.rays) {
+        val load = FloatArray(367)
+        for (b in bands) {
+            val d0 = floor(b.startFrac * totalSec / 86400).toInt()
+            val d1 = ceil(b.endFrac * totalSec / 86400).toInt()
+            val w = if (b.endFrac - b.startFrac >= LARGE_BAND_FRAC) 1f else 0.5f
+            for (d in max(d0, 0)..min(d1 - 1, 366)) load[d] += w
+        }
+        val rayPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            strokeWidth = lineW(1.15)
+            blendMode = if (lk.dark) android.graphics.BlendMode.SCREEN else android.graphics.BlendMode.MULTIPLY
+        }
+        val r0 = max(holeR, outerR * 0.06)
+        val nDays = (totalSec / 86400).toInt()
+        for (d in 0 until nDays) {
+            val f = (d + 0.5) * 86400 / totalSec
+            if (!visible(f - 0.002, f + 0.002)) continue
+            val past = f < nowFrac
+            val len = outerR * (0.42 + 0.19 * min(load[d], 3f)) * (if (past) 0.92 else 1.0)
+            rayPaint.color = withAlpha(lk.accent, if (past) 0.45f else 0.8f)
+            radial(tm.angleOf(f), r0, len, rayPaint)
+        }
+        if (lod.rMin < outerR * 0.3) {
+            val cr = (outerR * 0.3).toFloat()
+            canvas.drawCircle(lx.toFloat(), ly.toFloat(), cr, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                blendMode = rayPaint.blendMode
+                shader = RadialGradient(
+                    lx.toFloat(), ly.toFloat(), cr,
+                    intArrayOf(withAlpha(mix(lk.accent, BLACK, 0.35f), 0.85f), withAlpha(lk.accent, 0f)),
+                    null, Shader.TileMode.CLAMP,
+                )
             })
         }
+    }
+
+    // ── Обод (снаружи чёткий край) и обвод дырки ────────────────────────────
+    ringPath(outerR)?.let { path ->
+        strokeScreen(path, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = lineW(lk.ringWidth)
+            color = lk.ringColor
+            if (glowLocal > 0f) setShadowLayer(glowLocal * 0.8f * sF, 0f, 0f, withAlpha(lk.accent, 0.9f))
+        })
+    }
+    if (ds.ring && ds.holeLine) ringPath(holeR)?.let { path ->
+        strokeScreen(path, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = lineW(if (ds.outline > 0f) 2.4 else 1.4)
+            color = if (ds.outline > 0f) lk.ringColor else withAlpha(lk.accent, 0.7f)
+        })
     }
 
     // ── Подписи времени: фрактальная лестница день → час → минута → секунда ─
@@ -349,7 +462,7 @@ fun drawWheel(
     run {
         val steps = TIME_STEPS
         val fonts = timeLabelFonts(outerR, totalSec)
-        val rows = timeLabelRows(outerR, totalSec)
+        val rows = timeLabelRows(outerR, totalSec, digitH)
         for (i in 0..3) {
             val f = fonts[i]
             val vis = if (i == 0) dayVis else fade(f * s, 6.0, 10.0)
@@ -367,23 +480,23 @@ fun drawWheel(
                 val text = if (i == 0) tm.yearStart.plusDays(k).dayOfMonth.toString()
                 else "%02d".format(Math.floorMod(k, if (i == 1) 24L else 60L))
                 val fmid = (f0 + f1) / 2
-                val c = if (fmid <= nowFrac) th.dayNumPast else th.dayNumFuture
+                val c = if (fmid <= nowFrac) lk.dayNumPast else lk.dayNumFuture
                 label(text, tm.angleOf(fmid), rc, (f * s).toFloat(), mulAlpha(c, vis), digits = true)
             }
         }
     }
 
-    // ── Подписи месяцев ──────────────────────────────────────────────────────
-    val midR = (outerR + g.innerR) / 2
+    // ── Подписи месяцев — по дуге, всегда читаемые ──────────────────────────
+    val midR = if (ds.ring) max((outerR + g.innerR) / 2, holeR + 26 * unit) else (outerR + g.innerR) / 2
+    val monthNames = if (lk.font.caps) MONTHS_FULL.map { it.uppercase() } else MONTHS_FULL.toList()
+    val monthSize = (if (lk.font.caps) 11.0 else 13.5) * unit
     for (m in 1..12) {
         val f0 = monthFrac(m)
         val f1 = monthFrac(m + 1)
         if (!visible(f0, f1)) continue
-        label(
-            MONTHS_RU[m - 1], tm.angleOf((f0 + f1) / 2), midR,
-            (th.monthLabelFontMul * unit * s).toFloat(),
-            if (f1 <= nowFrac) th.monthLabelPast else th.monthLabelFuture,
-            medium = true,
+        arcLabel(
+            monthNames[m - 1], tm.angleOf((f0 + f1) / 2), midR, monthSize,
+            if (f1 <= nowFrac) lk.labelPast else lk.labelFuture,
         )
     }
 
@@ -393,7 +506,7 @@ fun drawWheel(
         val orbitPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             strokeWidth = (0.8 / s).toFloat()
-            color = withAlpha(WHITE, 0.06f)
+            color = if (lk.dark) withAlpha(WHITE, 0.06f) else withAlpha(BLACK, 0.10f)
         }
         val pt = DoubleArray(2)
         val path = Path()
@@ -430,18 +543,22 @@ fun drawWheel(
     }
 
     // ── События — дуги-ленточки ──────────────────────────────────────────────
-    val bandW = th.eventBandWidth * unit
+    val bandW = (if (ds.rays) 5.0 else 7.0) * unit
     val bandGap = 1.5 * unit
     val laneGap = 0.6 * unit
     val eventBandBaseR = outerR - 6.5 * unit
 
     if (bands.isNotEmpty()) {
-        val minBandR = g.innerR + bandW / 2 + bandGap
+        val minBandR = max(g.innerR, holeR) + bandW / 2 + bandGap
         val availableSpace = eventBandBaseR - bandW / 2 - minBandR
         val maxVisibleLayers =
             if (availableSpace > 0) (floor(availableSpace / (bandW + bandGap)) + 1).toInt() else 1
 
         val bandPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+        }
         val bandPath = Path()
         val pxPerFrac = 2.0 * PI * eventBandBaseR * s
 
@@ -459,7 +576,7 @@ fun drawWheel(
             }
 
             val sweepFrac = b.endFrac - b.startFrac
-            if (sweepFrac * pxPerFrac < 0.5) continue
+            if (sweepFrac * pxPerFrac < 0.5 && !ds.roundEvents) continue
 
             val rRow = (eventBandBaseR - b.layer * (bandW + bandGap) - bandW / 2)
                 .coerceIn(minBandR, eventBandBaseR)
@@ -472,14 +589,72 @@ fun drawWheel(
             val a1 = tm.angleOf(b.endFrac)
 
             val isPast = b.endFrac <= nowFrac
-            val alpha = if (isPast) th.eventPastAlpha else th.eventFutureAlpha
-            bandPaint.color = withAlpha(b.event.color, alpha)
-            if (!buildBandPath(bandPath, lx, ly, r, laneW / 2, a0, a1, s, ::clip)) continue
-            canvas.drawPath(bandPath, bandPaint)
+            val alpha = if (isPast) lk.eventPastAlpha else lk.eventFutureAlpha
+            val col = lk.eventColor(b.event.color, b.event.calendarId)
+            var textBg = col
+
+            if (ds.roundEvents) {
+                // «Пилюля»: круглые концы, общая длина = точная длина события.
+                val halfW = laneW / 2
+                val capA = halfW / r
+                val sgn = if (a1 >= a0) 1.0 else -1.0
+                val dot = abs(a1 - a0) <= 2 * capA
+                val ow = if (ds.outline > 0f) max(laneW * 0.22 * ds.outline, 1.1 / s) else 0.0
+                val fillCol = if (ds.outline > 0f) mix(lk.bd.bg1, col, 0.10f) else col
+                textBg = fillCol
+                if (glowLocal > 0f && !isPast) {
+                    bandPaint.setShadowLayer(glowLocal * 0.7f, 0f, 0f, withAlpha(col, 0.85f))
+                    strokePaint.setShadowLayer(glowLocal * 0.7f, 0f, 0f, withAlpha(col, 0.85f))
+                }
+                if (dot) {
+                    val am = (a0 + a1) / 2
+                    if (!angleVisible(am)) { bandPaint.clearShadowLayer(); strokePaint.clearShadowLayer(); continue }
+                    if (halfW * s < 0.6) { bandPaint.clearShadowLayer(); strokePaint.clearShadowLayer(); continue }
+                    val cxp = px(am, r); val cyp = py(am, r)
+                    if (ow > 0) {
+                        bandPaint.color = withAlpha(col, alpha)
+                        canvas.drawCircle(cxp, cyp, halfW.toFloat(), bandPaint)
+                        bandPaint.clearShadowLayer()
+                        bandPaint.color = withAlpha(fillCol, alpha)
+                        canvas.drawCircle(cxp, cyp, (halfW - ow).toFloat().coerceAtLeast(0f), bandPaint)
+                    } else {
+                        bandPaint.color = withAlpha(col, alpha)
+                        canvas.drawCircle(cxp, cyp, halfW.toFloat(), bandPaint)
+                    }
+                } else {
+                    val c = clip(a0 + sgn * capA, a1 - sgn * capA)
+                    if (c == null) { bandPaint.clearShadowLayer(); strokePaint.clearShadowLayer(); continue }
+                    bandPath.reset()
+                    arcPoly(bandPath, lx, ly, r, c[0], c[1], s, true)
+                    strokePaint.strokeWidth = laneW.toFloat()
+                    strokePaint.color = withAlpha(col, alpha)
+                    canvas.drawPath(bandPath, strokePaint)
+                    strokePaint.clearShadowLayer()
+                    if (ow > 0) {
+                        strokePaint.strokeWidth = (laneW - 2 * ow).toFloat().coerceAtLeast(0f)
+                        strokePaint.color = withAlpha(fillCol, alpha)
+                        canvas.drawPath(bandPath, strokePaint)
+                    } else if (ds.volume > 0f) {
+                        // Мультяшный блик: светлая полоска по внешней кромке.
+                        bandPath.reset()
+                        arcPoly(bandPath, lx, ly, r + halfW * 0.45, c[0], c[1], s, true)
+                        strokePaint.strokeWidth = (laneW * 0.14).toFloat()
+                        strokePaint.color = withAlpha(WHITE, 0.30f * ds.volume * alpha)
+                        canvas.drawPath(bandPath, strokePaint)
+                    }
+                }
+                bandPaint.clearShadowLayer(); strokePaint.clearShadowLayer()
+            } else {
+                if (sweepFrac * pxPerFrac < 0.5) continue
+                bandPaint.color = withAlpha(col, alpha)
+                if (!buildBandPath(bandPath, lx, ly, r, laneW / 2, a0, a1, s, ::clip)) continue
+                canvas.drawPath(bandPath, bandPaint)
+            }
 
             drawBandTitle(
                 canvas, textPaint, b.event.title, lx, ly, r, laneW, a0, a1,
-                b.event.color, alpha, settings.nowAtBottom,
+                textBg, alpha, face,
+                bottom = onBottom((a0 + a1) / 2),
                 isDayPlus = sweepFrac >= LARGE_BAND_FRAC,
                 ccw = settings.counterClockwise,
                 camScale = s,
@@ -492,7 +667,7 @@ fun drawWheel(
                 style = Paint.Style.STROKE
                 strokeWidth = (bandW * 0.6).toFloat()
                 strokeCap = Paint.Cap.ROUND
-                color = withAlpha(th.accent, 0.55f)
+                color = withAlpha(lk.accent, 0.55f)
             }
             for ((key, count) in overflowBuckets) {
                 val f = overflowFrac[key]!!
@@ -502,9 +677,42 @@ fun drawWheel(
                 arcPoly(path, lx, ly, overflowR, a0, a1, s, true)
                 canvas.drawPath(path, overflowPaint)
                 label("+$count", (a0 + a1) / 2, overflowR, (bandW * 0.9 * s).toFloat().coerceIn(6f, 40f),
-                    withAlpha(th.accent, 0.85f), medium = true)
+                    withAlpha(lk.ink, 0.85f))
             }
         }
+    }
+
+    // ── Риски времени — ПОВЕРХ событий: иначе на зуме дней/минут/секунд
+    // их целиком закрывали ленты (на телефоне с реальным календарём лент
+    // много — деления «пропадали»). В кольце начинаются от дырки.
+    run {
+        val r0 = if (ds.ring) holeR else 0.0
+        fun timeTicksFrom(step: Long, skip: Long, p: Paint) {
+            val k0 = ceil(fLo * totalSec / step).toLong()
+            val k1 = floor(fHi * totalSec / step).toLong()
+            if (k1 - k0 > 6000) return
+            for (k in k0..k1) {
+                val sec = k * step
+                if (skip > 0 && Math.floorMod(sec, skip) == 0L) continue
+                radial(tm.angleOf(sec / totalSec), r0, outerR, p)
+            }
+        }
+        if (!ds.rays) {
+            if (weekVis > 0f) {
+                val p = tickPaint(line, ta * 1.5f * weekVis, lineW(0.5))
+                val k0 = ceil(fLo * totalSec / 86400).toLong()
+                val k1 = floor(fHi * totalSec / 86400).toLong()
+                val dow0 = tm.yearStart.dayOfWeek.value - 1 // 0 = понедельник
+                for (k in k0..k1) {
+                    if (Math.floorMod(dow0 + k, 7L) != 0L) continue
+                    radial(tm.angleOf(k * 86400.0 / totalSec), r0, outerR, p)
+                }
+            }
+            if (dayVis > 0f) timeTicksFrom(86400, 0, tickPaint(line, ta * 1.25f * dayVis, lineW(0.3)))
+        }
+        if (hourVis > 0f) timeTicksFrom(3600, 86400, tickPaint(line, ta * 1.5f * hourVis, lineW(0.175)))
+        if (minVis > 0f) timeTicksFrom(60, 3600, tickPaint(line, ta * 1.4f * minVis, lineW(0.12)))
+        if (secVis > 0f) timeTicksFrom(1, 60, tickPaint(line, ta * 1.3f * secVis, lineW(0.08)))
     }
 
 }
@@ -537,7 +745,9 @@ fun drawBodies(
     fun onScreen(x: Double, y: Double, r: Double) = hypot(x, y) < lod.visR + r + 60 / s
 
     // ── Стрелка: от Солнца до Земли ──────────────────────────────────────────
-    val accent = settings.theme.accent
+    val lk = settings.look
+    val accent = lk.arrowColor
+    val glowLocal = (lk.d.glow * 16.0 * lod.density / 2.75 / s).toFloat()
     val nowAngle = tm.nowAngle
     val earthR = au * tm.earthDistAu
     val ex = lx + cos(nowAngle) * earthR
@@ -549,15 +759,21 @@ fun drawBodies(
         val ra = max(0.0, lod.rMin - 2 / s)
         val rb = min(earthR, lod.rMax + 2 / s)
         if (ra < rb) {
+            // В экранных px (см. radial в drawWheel): точность мобильных GPU.
+            val sf = s.toFloat()
+            canvas.save()
+            canvas.scale(1f / sf, 1f / sf)
             canvas.drawLine(
-                (lx + cos(nowAngle) * ra).toFloat(), (ly + sin(nowAngle) * ra).toFloat(),
-                (lx + cos(nowAngle) * rb).toFloat(), (ly + sin(nowAngle) * rb).toFloat(),
+                ((lx + cos(nowAngle) * ra) * s).toFloat(), ((ly + sin(nowAngle) * ra) * s).toFloat(),
+                ((lx + cos(nowAngle) * rb) * s).toFloat(), ((ly + sin(nowAngle) * rb) * s).toFloat(),
                 Paint(Paint.ANTI_ALIAS_FLAG).apply {
                     color = accent
-                    strokeWidth = lineW(3.0, 1.5)
+                    strokeWidth = lineW(3.0, 1.5) * sf
                     strokeCap = Paint.Cap.ROUND
+                    if (glowLocal > 0f) setShadowLayer(glowLocal * sf, 0f, 0f, withAlpha(accent, 0.9f))
                 },
             )
+            canvas.restore()
         }
     }
 
@@ -685,9 +901,14 @@ fun drawBodies(
 val TIME_STEPS = longArrayOf(86400, 3600, 60, 1)
 
 /** Высота цифр шрифта (доля кегля) — по реальным границам глифов. */
-val DIGIT_H: Double by lazy {
+val DIGIT_H: Double by lazy { digitHeight(Typeface.DEFAULT) }
+
+private val digitHCache = HashMap<Typeface, Double>()
+
+fun digitHeight(tf: Typeface): Double = digitHCache.getOrPut(tf) {
     val p = Paint(Paint.ANTI_ALIAS_FLAG)
     p.textSize = 100f
+    p.typeface = tf
     val b = android.graphics.Rect()
     p.getTextBounds("0123456789", 0, 10, b)
     (b.bottom - b.top) / 100.0
@@ -703,9 +924,8 @@ fun timeLabelFonts(outerR: Double, totalSec: Double) = DoubleArray(4) { i ->
  * секунды. Отступ от крупного ряда — 15% высоты его цифр + высота мелкой
  * цифры: ряды не касаются ни на каком зуме.
  */
-fun timeLabelRows(outerR: Double, totalSec: Double): DoubleArray {
+fun timeLabelRows(outerR: Double, totalSec: Double, h: Double = DIGIT_H): DoubleArray {
     val f = timeLabelFonts(outerR, totalSec)
-    val h = DIGIT_H
     val rows = DoubleArray(4)
     var edge = 0.35 * h * f[0]
     for (i in 0..3) {
@@ -790,7 +1010,8 @@ private fun drawBandTitle(
     a1: Double,
     bandColor: Int,
     bandAlpha: Float,
-    nowAtBottom: Boolean,
+    face: Typeface,
+    bottom: Boolean,
     isDayPlus: Boolean,
     ccw: Boolean,
     camScale: Double,
@@ -801,11 +1022,12 @@ private fun drawBandTitle(
     val lum = 0.299f * ((bandColor shr 16) and 0xFF) +
         0.587f * ((bandColor shr 8) and 0xFF) +
         0.114f * (bandColor and 0xFF)
-    paint.color = if (lum * bandAlpha > 165f) 0xD9000000.toInt() else 0xE8FFFFFF.toInt()
-    paint.typeface = Typeface.DEFAULT
+    paint.color = if (lum * bandAlpha > 150f) 0xD9140A1E.toInt() else 0xF0FFFFFF.toInt()
+    paint.typeface = face
+    paint.letterSpacing = 0f
 
     if (isDayPlus) {
-        drawArcTitle(canvas, paint, text, cx, cy, r, bandW, a0, a1, nowAtBottom, camScale)
+        drawArcTitle(canvas, paint, text, cx, cy, r, bandW, a0, a1, bottom, camScale)
     } else {
         drawRadialTitle(canvas, paint, text, cx, cy, r, bandW, a0, a1, ccw, camScale)
     }
@@ -825,7 +1047,7 @@ private fun drawArcTitle(
     bandW: Double,
     a0: Double,
     a1: Double,
-    nowAtBottom: Boolean,
+    bottom: Boolean,
     camScale: Double,
 ) {
     val sweepAbs = abs(a1 - a0)
@@ -849,10 +1071,11 @@ private fun drawArcTitle(
     val ls = lines ?: return
     if (fs * camScale < TEXT_MIN_SCREEN_FS || fs * camScale > TEXT_MAX_SCREEN_FS) return
 
-    // Путь по дуге: при «сейчас внизу» — по убыванию угла (низ текста наружу).
+    // Путь по дуге: внизу экрана — по убыванию угла (текст читается прямо),
+    // вверху — по возрастанию (переворачивается, чтобы тоже читался).
     val lo = min(a0, a1); val hi = max(a0, a1)
     val path = Path()
-    if (nowAtBottom) arcPoly(path, cx, cy, r, hi, lo, camScale, true)
+    if (bottom) arcPoly(path, cx, cy, r, hi, lo, camScale, true)
     else arcPoly(path, cx, cy, r, lo, hi, camScale, true)
 
     paint.textSize = fs

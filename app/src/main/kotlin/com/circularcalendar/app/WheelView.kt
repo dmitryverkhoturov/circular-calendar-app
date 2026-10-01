@@ -1,7 +1,12 @@
 package com.circularcalendar.app
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapShader
+import android.graphics.BlendMode
 import android.graphics.Canvas
+import android.graphics.RadialGradient
+import android.graphics.Shader
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RenderNode
@@ -401,16 +406,16 @@ class WheelView(context: Context) : View(context) {
      * Отладка (adb): навести камеру на точку круга — [secs] секунд от «сейчас»,
      * на доле радиуса [rf] (1 = внешнее кольцо), зум [zoom], без поворота.
      */
-    fun debugLook(zoom: Double, secs: Double, rf: Double) {
+    fun debugLook(zoom: Double, secs: Double, rf: Double, th: Double = 0.0) {
         stopAll()
         refreshTime()
         val g = geom()
         val a = tmDyn.angleOf(tmDyn.nowFrac + secs / tmDyn.totalSec)
         // rf < 0: навестись на ряд подписей №(-rf): 1 день, 2 часы, 3 минуты, 4 секунды.
         val r = if (rf < 0) timeLabelRows(g.outerR, tmDyn.totalSec)[(-rf).toInt() - 1] else g.outerR * rf
-        camS = zoom; camTh = 0.0
-        camOx = width / 2.0 - zoom * cos(a) * r
-        camOy = height / 2.0 - zoom * sin(a) * r
+        camS = zoom; camTh = th
+        camOx = width / 2.0 - zoom * cos(a + th) * r
+        camOy = height / 2.0 - zoom * sin(a + th) * r
         sceneDirty = true
         invalidate()
     }
@@ -544,6 +549,7 @@ class WheelView(context: Context) : View(context) {
     }
 
     private var mode = UNDECIDED
+    private var downOnRing = true
     private var accumTan = 0.0
     private var accumRad = 0.0
     private var lastX = 0.0
@@ -622,11 +628,13 @@ class WheelView(context: Context) : View(context) {
                     hypot(x - lastTapX, y - lastTapY) < dtSlop) tapCount + 1 else 1
                 if (seq == 1) tapCount = 0
                 val g = geom()
-                val inCenter = hypot(x - camOx, y - camOy) < g.innerR * camS
+                // Крутить можно только за кольцо: в дырке и за внешним краем — панорама.
+                val dWheel = hypot(x - camOx, y - camOy) / camS
+                downOnRing = dWheel >= max(g.innerR, settings.look.holeR * g.outerR) && dWheel <= g.outerR
                 mode = when {
                     seq == 2 -> QS_PENDING
                     seq >= 3 -> TRIPLE_PENDING
-                    inCenter -> CENTER_PENDING
+                    !downOnRing -> CENTER_PENDING
                     else -> UNDECIDED
                 }
                 cum.fill(0.0)
@@ -722,7 +730,7 @@ class WheelView(context: Context) : View(context) {
                     }
                     TRIPLE_PENDING -> {
                         if (maxMove < touchSlop) return true
-                        mode = UNDECIDED
+                        mode = if (downOnRing) UNDECIDED else PAN
                     }
                     CENTER_PENDING -> {
                         if (maxMove < touchSlop) return true
@@ -881,7 +889,7 @@ class WheelView(context: Context) : View(context) {
         tm = TimeMap(now, settings.counterClockwise, settings.nowAtBottom, settings.keplerOrbit, settings.arrowMoves)
         val filtered = events.filter { settings.calendarFilter.allows(it) }
         this.bands = buildEventBands(filtered, now.year, tm.nowFrac, settings.largeEventsOnTop)
-        setBackgroundColor(settings.theme.background)
+        bgKey = null
         sceneDirty = true
         invalidate()
     }
@@ -1032,13 +1040,71 @@ class WheelView(context: Context) : View(context) {
         sceneDirty = false
     }
 
+    // ── Фон и зерно — в ЭКРАННЫХ координатах (не зумятся вместе с кругом) ───
+    private var bgKey: Any? = null
+    private val bgPaint = Paint()
+    private var starPts: Array<FloatArray> = emptyArray()
+    private val starPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeCap = Paint.Cap.ROUND }
+    private var grainPaint: Paint? = null
+
+    private fun prepareBackdrop() {
+        val lk = settings.look
+        val key = listOf(width, height, lk.d.backdrop, lk.d.stars)
+        if (key == bgKey) return
+        bgKey = key
+        val w = width.toFloat(); val h = height.toFloat()
+        bgPaint.shader = RadialGradient(
+            w / 2, h * 0.45f, max(w, h) * 0.75f,
+            intArrayOf(lk.bd.bg0, lk.bd.bg1), null, Shader.TileMode.CLAMP,
+        )
+        if (lk.d.stars && lk.dark) {
+            // Три яркости звёзд, по drawPoints на каждую — дёшево.
+            val rnd = java.util.Random(7)
+            starPts = Array(3) { b ->
+                val n = intArrayOf(110, 45, 14)[b]
+                FloatArray(n * 2) { i -> if (i % 2 == 0) rnd.nextFloat() * w else rnd.nextFloat() * h }
+            }
+        } else starPts = emptyArray()
+    }
+
+    private fun drawBackdrop(canvas: Canvas) {
+        prepareBackdrop()
+        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bgPaint)
+        val sizes = floatArrayOf(1.2f, 1.9f, 2.8f)
+        val alphas = floatArrayOf(0.35f, 0.55f, 0.8f)
+        for (b in starPts.indices) {
+            starPaint.strokeWidth = sizes[b] * density / 2.75f * 2f
+            starPaint.color = withAlpha(WHITE, alphas[b])
+            canvas.drawPoints(starPts[b], starPaint)
+        }
+    }
+
+    private fun drawGrain(canvas: Canvas) {
+        val lk = settings.look
+        if (lk.d.grain <= 0f) return
+        val gp = grainPaint ?: Paint().also { p ->
+            val n = 256
+            val px = IntArray(n * n)
+            val rnd = java.util.Random(11)
+            for (i in px.indices) { val v = rnd.nextInt(256); px[i] = (0xFF shl 24) or (v shl 16) or (v shl 8) or v }
+            val bmp = Bitmap.createBitmap(px, n, n, Bitmap.Config.ARGB_8888)
+            p.shader = BitmapShader(bmp, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
+            grainPaint = p
+        }
+        gp.blendMode = if (lk.dark) BlendMode.OVERLAY else BlendMode.MULTIPLY
+        gp.alpha = (lk.d.grain * (if (lk.dark) 0.55f else 0.45f) * 255).toInt().coerceIn(0, 255)
+        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), gp)
+    }
+
     override fun onDraw(canvas: Canvas) {
         if (width <= 0 || height <= 0) return
         refreshTime()
+        drawBackdrop(canvas)
 
         if (!canvas.isHardwareAccelerated) {
             drawSceneInto(canvas, 0.0, 0.0, width.toDouble(), height.toDouble())
             drawBodiesInto(canvas)
+            drawGrain(canvas)
             return
         }
 
@@ -1055,6 +1121,7 @@ class WheelView(context: Context) : View(context) {
             canvas.restore()
         }
         drawBodiesInto(canvas)
+        drawGrain(canvas)
 
         // На глубоком зуме время видно глазом — плавно, каждый кадр.
         if (timePxPerSec() > 0.05) postInvalidateOnAnimation()

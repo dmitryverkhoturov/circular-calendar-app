@@ -74,7 +74,7 @@ class MainActivity : Activity() {
         settings = WheelSettings(
             counterClockwise = p.getBoolean("ccw", true),
             nowAtBottom = p.getBoolean("nowBottom", true),
-            themeIndex = p.getInt("themeIdx", 0).coerceIn(0, THEMES.size - 1),
+            design = Design.fromJson(p.getString("design", null)),
             calendarFilter = filter,
             largeEventsOnTop = p.getBoolean("largeTop", false),
             keplerOrbit = p.getBoolean("kepler", false),
@@ -111,7 +111,7 @@ class MainActivity : Activity() {
         val p = getSharedPreferences("settings", MODE_PRIVATE).edit()
         p.putBoolean("ccw", settings.counterClockwise)
         p.putBoolean("nowBottom", settings.nowAtBottom)
-        p.putInt("themeIdx", settings.themeIndex)
+        p.putString("design", settings.design.toJson())
         p.putBoolean("largeTop", settings.largeEventsOnTop)
         p.putBoolean("kepler", settings.keplerOrbit)
         p.putBoolean("orbits", settings.showOrbits)
@@ -141,8 +141,27 @@ class MainActivity : Activity() {
         settings = s
         saveSettings()
         wheel.update(settings, events, now)
+        styleSettingsButton()
         rebuildPanelIfOpen()
     }
+
+    /** Ползунок дизайна: без пересборки панели (иначе рвётся касание). */
+    private fun applyDesignLive(d: Design) {
+        settings = settings.copy(design = d)
+        saveSettings()
+        wheel.update(settings, events, now)
+    }
+
+    private fun applyDesign(d: Design) = applySettings(settings.copy(design = d))
+
+    private fun styleSettingsButton() {
+        if (!::settingsButton.isInitialized) return
+        val fg = panelFg()
+        settingsButton.setTextColor(withAlpha(fg, 0.9f))
+        settingsButton.background = roundedBg(withAlpha(fg, 0.08f), 8f)
+    }
+
+    private fun panelFg(): Int = if (settings.look.dark) WHITE else 0xFF1C1020.toInt()
 
     // ── Жизненный цикл ───────────────────────────────────────────────────────
 
@@ -192,20 +211,23 @@ class MainActivity : Activity() {
             insets
         }
 
-        // Маленькая, почти незаметная кнопка настроек — внизу слева (§3b SPEC).
+        // Маленькая, почти незаметная кнопка настроек — вверху слева.
         settingsButton = TextView(this).apply {
             text = "⚙︎" // ⚙ в текстовом стиле (не эмодзи)
             textSize = 15f
-            setTextColor(withAlpha(WHITE, 0.85f))
             gravity = Gravity.CENTER
-            alpha = 0.28f
-            background = roundedBg(withAlpha(WHITE, 0.06f), 8f)
+            alpha = 0.32f
+            isSoundEffectsEnabled = false
             setOnClickListener { togglePanel() }
         }
+        styleSettingsButton()
         overlay.addView(settingsButton, FrameLayout.LayoutParams(dp(32f), dp(32f)).apply {
-            gravity = Gravity.BOTTOM or Gravity.START
-            leftMargin = dp(12f); bottomMargin = dp(12f)
+            gravity = Gravity.TOP or Gravity.START
+            leftMargin = dp(12f); topMargin = dp(10f)
         })
+        root.isSoundEffectsEnabled = false
+        overlay.isSoundEffectsEnabled = false
+        wheel.isSoundEffectsEnabled = false
 
         setContentView(root)
 
@@ -236,6 +258,7 @@ class MainActivity : Activity() {
                     intent.getFloatExtra("zoom", 1f).toDouble(),
                     intent.getFloatExtra("secs", 0f).toDouble(),
                     intent.getFloatExtra("rf", 1f).toDouble(),
+                    intent.getFloatExtra("th", 0f).toDouble(),
                 )
             }
         }
@@ -306,29 +329,54 @@ class MainActivity : Activity() {
 
     // ── Панель настроек ──────────────────────────────────────────────────────
 
+    private var scrim: View? = null
+    private var panelScroll = 0
+
     private fun togglePanel() {
         if (panel != null) {
+            panelScroll = (panel as? ScrollView)?.scrollY ?: 0
             overlay.removeView(panel)
-            panel = null
-            settingsButton.alpha = 0.28f
+            overlay.removeView(scrim)
+            panel = null; scrim = null
+            settingsButton.alpha = 0.32f
         } else {
+            // Тап мимо панели закрывает её (и не трогает круг).
+            val sc = View(this).apply {
+                isSoundEffectsEnabled = false
+                setOnTouchListener { _, ev ->
+                    if (ev.actionMasked == android.view.MotionEvent.ACTION_DOWN) togglePanel()
+                    true
+                }
+            }
+            scrim = sc
+            overlay.addView(sc, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
             val v = buildPanel()
+            quiet(v)
             panel = v
             overlay.addView(v, FrameLayout.LayoutParams(
-                dp(272f), FrameLayout.LayoutParams.WRAP_CONTENT).apply {
-                gravity = Gravity.BOTTOM or Gravity.START
-                leftMargin = dp(8f); bottomMargin = dp(52f)
+                dp(288f), FrameLayout.LayoutParams.WRAP_CONTENT).apply {
+                gravity = Gravity.TOP or Gravity.START
+                leftMargin = dp(8f); topMargin = dp(50f); bottomMargin = dp(12f)
             })
-            settingsButton.alpha = 0.70f
+            val y = panelScroll
+            v.post { (v as? ScrollView)?.scrollTo(0, y) }
+            settingsButton.alpha = 0.75f
+            settingsButton.bringToFront()
         }
     }
 
     private fun rebuildPanelIfOpen() {
         if (panel != null) {
-            overlay.removeView(panel)
-            panel = null
+            togglePanel()
             togglePanel()
         }
+    }
+
+    /** Никаких звуков нажатий нигде в панели. */
+    private fun quiet(v: View) {
+        v.isSoundEffectsEnabled = false
+        if (v is android.view.ViewGroup) for (i in 0 until v.childCount) quiet(v.getChildAt(i))
     }
 
     private fun roundedBg(
@@ -340,15 +388,18 @@ class MainActivity : Activity() {
     }
 
     private fun label(text: String): TextView = TextView(this).apply {
-        this.text = text
+        this.text = text.uppercase()
         textSize = 10f
-        letterSpacing = 0.08f
-        setTextColor(withAlpha(WHITE, 0.35f))
+        letterSpacing = 0.12f
+        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        setTextColor(withAlpha(panelFg(), 0.45f))
     }
 
     private fun toggle(
         options: List<String>, selected: Int, onTap: (Int) -> Unit,
     ): LinearLayout {
+        val fg = panelFg()
+        val acc = settings.look.accent
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         options.forEachIndexed { i, opt ->
             val active = i == selected
@@ -356,13 +407,14 @@ class MainActivity : Activity() {
                 text = opt
                 textSize = 12f
                 gravity = Gravity.CENTER
-                setPadding(0, dp(6f), 0, dp(6f))
-                setTextColor(withAlpha(WHITE, if (active) 0.88f else 0.38f))
+                maxLines = 1
+                setPadding(dp(2f), dp(7f), dp(2f), dp(7f))
+                setTextColor(if (active) (if (luminance(acc) > 150) 0xFF1C1020.toInt() else WHITE) else withAlpha(fg, 0.6f))
                 typeface = if (active) Typeface.create("sans-serif-medium", Typeface.NORMAL)
                            else Typeface.DEFAULT
                 background = roundedBg(
-                    withAlpha(WHITE, if (active) 0.12f else 0.04f), 6f,
-                    strokeColor = withAlpha(WHITE, if (active) 0.20f else 0.06f),
+                    if (active) acc else withAlpha(fg, 0.05f), 99f,
+                    strokeColor = if (active) null else withAlpha(fg, 0.10f),
                 )
                 setOnClickListener { onTap(i) }
             }
@@ -373,10 +425,23 @@ class MainActivity : Activity() {
         return row
     }
 
-    private fun dot(color: Int, sizeDp: Float): View = View(this).apply {
+    /** Несколько рядов toggle по [perRow] штук. */
+    private fun toggleGrid(col: LinearLayout, options: List<String>, selected: Int, perRow: Int, onTap: (Int) -> Unit) {
+        options.chunked(perRow).forEachIndexed { r, chunk ->
+            val base = r * perRow
+            val padded = chunk + List(perRow - chunk.size) { "" }
+            val row = toggle(padded, selected - base) { i -> if (base + i < options.size) onTap(base + i) }
+            for (i in chunk.size until perRow) row.getChildAt(i).visibility = View.INVISIBLE
+            col.addView(row, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(4f) })
+        }
+    }
+
+    private fun dot(color: Int, sizeDp: Float, ring: Int? = null): View = View(this).apply {
         background = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(color)
+            if (ring != null) setStroke(dp(2f), ring)
         }
         layoutParams = LinearLayout.LayoutParams(dp(sizeDp), dp(sizeDp))
     }
@@ -392,6 +457,7 @@ class MainActivity : Activity() {
         title: String, value: Double, lo: Double, hi: Double, fmt: String,
         onChange: (Double) -> Unit,
     ): View {
+        val fg = panelFg()
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, dp(4f), 0, 0)
@@ -399,13 +465,14 @@ class MainActivity : Activity() {
         val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         head.addView(TextView(this).apply {
             text = title
-            textSize = 11f
-            setTextColor(withAlpha(WHITE, 0.65f))
+            textSize = 12f
+            setTextColor(withAlpha(fg, 0.75f))
         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         val valueView = TextView(this).apply {
             text = fmt.format(value)
             textSize = 11f
-            setTextColor(withAlpha(WHITE, 0.85f))
+            typeface = Typeface.MONOSPACE
+            setTextColor(withAlpha(fg, 0.55f))
         }
         head.addView(valueView)
         box.addView(head)
@@ -413,10 +480,10 @@ class MainActivity : Activity() {
         box.addView(SeekBar(this).apply {
             max = steps
             progress = (((value - lo) / (hi - lo)) * steps).toInt().coerceIn(0, steps)
-            val tint = android.content.res.ColorStateList.valueOf(settings.theme.accent)
+            val tint = android.content.res.ColorStateList.valueOf(settings.look.accent)
             progressTintList = tint
             thumbTintList = tint
-            progressBackgroundTintList = android.content.res.ColorStateList.valueOf(withAlpha(WHITE, 0.25f))
+            progressBackgroundTintList = android.content.res.ColorStateList.valueOf(withAlpha(fg, 0.25f))
             setPadding(dp(6f), dp(6f), dp(6f), dp(6f))
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(sb: SeekBar, p: Int, fromUser: Boolean) {
@@ -435,13 +502,125 @@ class MainActivity : Activity() {
     }
 
     private fun buildPanel(): View {
+        val fg = panelFg()
+        val lk = settings.look
+        val d = settings.design
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16f), dp(14f), dp(16f), dp(14f))
+            setPadding(dp(16f), dp(14f), dp(16f), dp(16f))
         }
 
         fun space(h: Float) = col.addView(View(this), LinearLayout.LayoutParams(1, dp(h)))
+        fun full(v: View) = col.addView(v, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
 
+        // ═════ Дизайн ═════
+        col.addView(label("Стиль"))
+        space(6f)
+        val presetIdx = PRESETS.indexOfFirst { it.second.preset == d.preset }
+        toggleGrid(col, PRESETS.map { it.first }, presetIdx, 3) { i -> applyDesign(PRESETS[i].second) }
+        space(12f)
+
+        col.addView(label("Главный цвет"))
+        space(8f)
+        run {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            for ((c, _) in SWATCHES) {
+                val v = dot(c, 26f, if (c == d.accent) fg else withAlpha(fg, 0.15f))
+                v.setOnClickListener { applyDesign(d.copy(accent = c, preset = "custom")) }
+                row.addView(v, LinearLayout.LayoutParams(dp(26f), dp(26f)).apply { rightMargin = dp(9f) })
+            }
+            col.addView(row)
+        }
+        space(4f)
+        run {
+            val hsl = colorToHsl(d.accent)
+            var h = hsl[0].toDouble(); if (h < 200) h += 360
+            var sat = hsl[1].toDouble(); var lit = hsl[2].toDouble()
+            fun push() = applyDesignLive(settings.design.copy(accent = hslToColor(h.toFloat(), sat.toFloat(), lit.toFloat()), preset = "custom"))
+            full(slider("Оттенок (фиолет ← → малина)", h, 260.0, 380.0, "%.0f°") { h = it; push() })
+            full(slider("Сочность", sat, 0.0, 100.0, "%.0f") { sat = it; push() })
+            full(slider("Светлота", lit, 10.0, 90.0, "%.0f") { lit = it; push() })
+        }
+        space(12f)
+
+        col.addView(label("Центр"))
+        space(6f)
+        col.addView(toggle(listOf("Кольцо с дыркой", "Залит"), if (d.ring) 0 else 1) { i ->
+            applyDesign(d.copy(ring = i == 0, hole = if (i == 0 && d.hole < 0.05f) 0.3f else d.hole, preset = "custom"))
+        })
+        space(2f)
+        fun dsl(title: String, v: Float, lo: Double, hi: Double, set: (Design, Float) -> Design) =
+            full(slider(title, v.toDouble(), lo, hi, "%.2f") { x -> applyDesignLive(set(settings.design, x.toFloat()).copy(preset = "custom")) })
+        if (d.ring) dsl("Размер дырки", d.hole, 0.05, 0.7) { o, x -> o.copy(hole = x) }
+        dsl("Градиент (0 = из прозрачного)", d.grad, 0.0, 1.0) { o, x -> o.copy(grad = x) }
+        dsl("Цвет в заливке", d.tint, 0.0, 1.0) { o, x -> o.copy(tint = x) }
+        dsl("Прошлое темнее", d.pastDim, 0.0, 1.0) { o, x -> o.copy(pastDim = x) }
+        if (d.ring) {
+            space(4f)
+            col.addView(toggle(listOf("Обвод дырки", "Без обвода"), if (d.holeLine) 0 else 1) { i ->
+                applyDesign(d.copy(holeLine = i == 0, preset = "custom"))
+            })
+        }
+        space(12f)
+
+        col.addView(label("Фон"))
+        space(6f)
+        toggleGrid(col, BACKDROPS.map { it.name }, d.backdrop, 3) { i -> applyDesign(d.copy(backdrop = i, preset = "custom")) }
+        space(12f)
+
+        col.addView(label("Эффекты"))
+        dsl("Свечение", d.glow, 0.0, 1.0) { o, x -> o.copy(glow = x) }
+        dsl("Зерно", d.grain, 0.0, 1.0) { o, x -> o.copy(grain = x) }
+        dsl("Объём", d.volume, 0.0, 1.0) { o, x -> o.copy(volume = x) }
+        dsl("Обводка событий", d.outline, 0.0, 1.0) { o, x -> o.copy(outline = x) }
+        space(4f)
+        col.addView(toggle(listOf("Звёзды", "Без звёзд"), if (d.stars) 0 else 1) { i ->
+            applyDesign(d.copy(stars = i == 0, preset = "custom"))
+        })
+        space(4f)
+        col.addView(toggle(listOf("Лучи по дням", "Без лучей"), if (d.rays) 0 else 1) { i ->
+            applyDesign(d.copy(rays = i == 0, preset = "custom"))
+        })
+        space(12f)
+
+        col.addView(label("События"))
+        space(6f)
+        col.addView(toggle(listOf("Пилюли", "Ленты"), if (d.roundEvents) 0 else 1) { i ->
+            applyDesign(d.copy(roundEvents = i == 0, preset = "custom"))
+        })
+        space(4f)
+        toggleGrid(col, PALETTE_NAMES, d.palette, 2) { i -> applyDesign(d.copy(palette = i, preset = "custom")) }
+        space(12f)
+
+        col.addView(label("Шрифт"))
+        space(6f)
+        toggleGrid(col, FONTS.map { it.name }, d.font, 3) { i -> applyDesign(d.copy(font = i, preset = "custom")) }
+        space(12f)
+
+        col.addView(label("Стрелка «сейчас»"))
+        space(6f)
+        col.addView(toggle(ARROW_NAMES, d.arrow) { i -> applyDesign(d.copy(arrow = i, preset = "custom")) })
+        space(10f)
+        full(TextView(this).apply {
+            text = "Скопировать дизайн (для чата)"
+            textSize = 12f
+            gravity = Gravity.CENTER
+            setPadding(0, dp(8f), 0, dp(8f))
+            setTextColor(withAlpha(fg, 0.8f))
+            background = roundedBg(withAlpha(fg, 0.06f), 99f, strokeColor = withAlpha(fg, 0.12f))
+            setOnClickListener {
+                val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("design", settings.design.toJson()))
+                text = "Скопировано"
+            }
+        })
+        space(18f)
+
+        // ═════ Поведение ═════
         col.addView(label("Ориентация круга"))
         space(6f)
         col.addView(toggle(listOf("Против часовой", "По часовой"),
@@ -496,30 +675,31 @@ class MainActivity : Activity() {
         })
         space(14f)
 
+
         col.addView(label("Анимация"))
         space(4f)
-        col.addView(slider("Затухание инерции", motion.friction, 1.5, 20.0, "%.1f") {
+        full(slider("Затухание инерции", motion.friction, 1.5, 20.0, "%.1f") {
             applyMotion(motion.copy(friction = it))
         })
-        col.addView(slider("Сила броска", motion.launch, 0.2, 2.5, "%.2f") {
+        full(slider("Сила броска", motion.launch, 0.2, 2.5, "%.2f") {
             applyMotion(motion.copy(launch = it))
         })
-        col.addView(slider("Жёсткость пружины", motion.spring, 6.0, 45.0, "%.0f") {
+        full(slider("Жёсткость пружины", motion.spring, 6.0, 45.0, "%.0f") {
             applyMotion(motion.copy(spring = it))
         })
-        col.addView(slider("Упругость (меньше = пружинит)", motion.damping, 0.35, 1.0, "%.2f") {
+        full(slider("Упругость (меньше = пружинит)", motion.damping, 0.35, 1.0, "%.2f") {
             applyMotion(motion.copy(damping = it))
         })
-        col.addView(slider("Разгон повторным броском", motion.boost, 0.0, 1.5, "%.2f") {
+        full(slider("Разгон повторным броском", motion.boost, 0.0, 1.5, "%.2f") {
             applyMotion(motion.copy(boost = it))
         })
-        col.addView(slider("Порог вращения двумя пальцами, °", motion.rotThreshold, 0.0, 30.0, "%.0f") {
+        full(slider("Порог вращения двумя пальцами, °", motion.rotThreshold, 0.0, 30.0, "%.0f") {
             applyMotion(motion.copy(rotThreshold = it))
         })
-        col.addView(slider("Рост порога при зуме, ° на ×2", motion.rotZoomK, 0.0, 80.0, "%.0f") {
+        full(slider("Рост порога при зуме, ° на ×2", motion.rotZoomK, 0.0, 80.0, "%.0f") {
             applyMotion(motion.copy(rotZoomK = it))
         })
-        col.addView(slider("Догон пальцев после порога", motion.rotCatchUp, 3.0, 40.0, "%.0f") {
+        full(slider("Догон пальцев после порога", motion.rotCatchUp, 3.0, 40.0, "%.0f") {
             applyMotion(motion.copy(rotCatchUp = it))
         })
         space(4f)
@@ -528,8 +708,8 @@ class MainActivity : Activity() {
             textSize = 11f
             gravity = Gravity.CENTER
             setPadding(0, dp(5f), 0, dp(5f))
-            setTextColor(withAlpha(WHITE, 0.55f))
-            background = roundedBg(withAlpha(WHITE, 0.04f), 6f, strokeColor = withAlpha(WHITE, 0.08f))
+            setTextColor(withAlpha(fg, 0.55f))
+            background = roundedBg(withAlpha(fg, 0.04f), 6f, strokeColor = withAlpha(fg, 0.08f))
             setOnClickListener {
                 applyMotion(MotionSettings())
                 rebuildPanelIfOpen()
@@ -539,32 +719,6 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams.WRAP_CONTENT))
         space(14f)
 
-        col.addView(label("Тема"))
-        space(6f)
-        THEMES.forEachIndexed { i, t ->
-            val active = settings.themeIndex == i
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(10f), dp(7f), dp(10f), dp(7f))
-                background = if (active)
-                    roundedBg(withAlpha(WHITE, 0.10f), 6f, strokeColor = withAlpha(WHITE, 0.20f))
-                else null
-                setOnClickListener { applySettings(settings.copy(themeIndex = i)) }
-            }
-            row.addView(dot(t.accent, 10f))
-            row.addView(TextView(this).apply {
-                text = t.name
-                textSize = 13f
-                setTextColor(withAlpha(WHITE, if (active) 0.90f else 0.50f))
-                typeface = if (active) Typeface.create("sans-serif-medium", Typeface.NORMAL)
-                           else Typeface.DEFAULT
-                setPadding(dp(8f), 0, 0, 0)
-            })
-            col.addView(row, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(4f) })
-        }
 
         // Фильтр календарей: реальные, если есть; иначе — из мок-событий.
         val entries: List<Triple<String, String, Int>> =
@@ -597,13 +751,13 @@ class MainActivity : Activity() {
                     text = name
                     textSize = 12f
                     maxLines = 1
-                    setTextColor(withAlpha(WHITE, if (allowed) 0.80f else 0.30f))
+                    setTextColor(withAlpha(fg, if (allowed) 0.80f else 0.30f))
                     setPadding(dp(8f), 0, dp(6f), 0)
                 }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
                 row.addView(TextView(this).apply {
                     text = if (allowed) "✓" else "—"
                     textSize = 12f
-                    setTextColor(withAlpha(WHITE, if (allowed) 0.50f else 0.20f))
+                    setTextColor(withAlpha(fg, if (allowed) 0.50f else 0.20f))
                 })
                 col.addView(row, LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
@@ -618,20 +772,22 @@ class MainActivity : Activity() {
             textSize = 12f
             gravity = Gravity.CENTER
             setPadding(0, dp(7f), 0, dp(7f))
-            setTextColor(withAlpha(WHITE, 0.75f))
-            background = roundedBg(withAlpha(WHITE, 0.06f), 6f,
-                strokeColor = withAlpha(WHITE, 0.10f))
+            setTextColor(withAlpha(fg, 0.75f))
+            background = roundedBg(withAlpha(fg, 0.06f), 6f,
+                strokeColor = withAlpha(fg, 0.10f))
             setOnClickListener { requestCalendarOrLoad() }
         }, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT))
 
+
         val scroll = ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
             background = roundedBg(
-                withAlpha(0xFF111520.toInt(), 0.95f), 12f,
-                strokeColor = withAlpha(WHITE, 0.08f),
+                withAlpha(mix(lk.bd.bg1, lk.bd.surface, 0.5f), 0.96f), 16f,
+                strokeColor = withAlpha(fg, 0.10f),
             )
+            elevation = dp(6f).toFloat()
             clipToOutline = true
             addView(col)
         }
