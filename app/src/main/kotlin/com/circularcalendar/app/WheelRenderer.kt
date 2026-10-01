@@ -184,8 +184,13 @@ fun drawWheel(
     val mediumFace = Typeface.create("sans-serif-medium", Typeface.NORMAL)
 
     /** Подпись вдоль окружности с ЭКРАННЫМ кеглем [sizePx]. */
-    fun label(text: String, a: Double, r: Double, sizePx: Float, color: Int, medium: Boolean = false) {
-        if (sizePx < 2.5f || sizePx > 2500f) return
+    val digitH = DIGIT_H
+
+    fun label(
+        text: String, a: Double, r: Double, sizePx: Float, color: Int,
+        medium: Boolean = false, digits: Boolean = false,
+    ) {
+        if (sizePx < 2.5f) return
         val reach = sizePx * 3 / s
         if (r < lod.rMin - reach || r > lod.rMax + reach) return
         textPaint.textSize = sizePx
@@ -195,7 +200,10 @@ fun drawWheel(
         canvas.translate(px(a, r), py(a, r))
         canvas.rotate(deg(a + textRotOffset))
         canvas.scale(1f / sF, 1f / sF)
-        canvas.drawText(text, 0f, -(textPaint.ascent() + textPaint.descent()) / 2f, textPaint)
+        // Цифры центрируются по их реальной высоте (ряды встают точно).
+        val y = if (digits) (digitH * sizePx / 2).toFloat()
+        else -(textPaint.ascent() + textPaint.descent()) / 2f
+        canvas.drawText(text, 0f, y, textPaint)
         canvas.restore()
     }
 
@@ -339,23 +347,13 @@ fun drawWheel(
     // День — крупное число на весь день; часы/минуты/секунды — каждое мельче
     // (пропорционально своему интервалу) и ближе к краю, «над» крупным.
     run {
-        val steps = longArrayOf(86400, 3600, 60, 1)
-        val fonts = DoubleArray(4) { i ->
-            if (i == 0) 4.5 * unit else 0.55 * 2 * PI * outerR * steps[i] / totalSec
-        }
-        // Ряды лесенкой внутрь: число дня у самого края, над ним (к центру)
-        // часы, над часами минуты, над минутами секунды. rc — центр ряда.
-        val rows = DoubleArray(4)
-        var edge = 0.18 * fonts[0]
-        for (i in 0..3) {
-            if (i > 0) edge += 0.35 * fonts[i]
-            rows[i] = outerR - edge - 0.36 * fonts[i]
-            edge += 0.72 * fonts[i]
-        }
+        val steps = TIME_STEPS
+        val fonts = timeLabelFonts(outerR, totalSec)
+        val rows = timeLabelRows(outerR, totalSec)
         for (i in 0..3) {
             val f = fonts[i]
             val vis = if (i == 0) dayVis else fade(f * s, 6.0, 10.0)
-            if (vis <= 0f || f * s > 3000) continue
+            if (vis <= 0f) continue
             val rc = rows[i]
             if (rc + f < lod.rMin || rc - f > lod.rMax) continue
             val step = steps[i]
@@ -370,7 +368,7 @@ fun drawWheel(
                 else "%02d".format(Math.floorMod(k, if (i == 1) 24L else 60L))
                 val fmid = (f0 + f1) / 2
                 val c = if (fmid <= nowFrac) th.dayNumPast else th.dayNumFuture
-                label(text, tm.angleOf(fmid), rc, (f * s).toFloat(), mulAlpha(c, vis))
+                label(text, tm.angleOf(fmid), rc, (f * s).toFloat(), mulAlpha(c, vis), digits = true)
             }
         }
     }
@@ -587,12 +585,12 @@ fun drawBodies(
     fun body(x: Double, y: Double, rc: Double, day: Int, night: Int) {
         if (!onScreen(x, y, rc)) return
         val px = rc * s
-        val alpha = 0.16f + 0.84f * fade(px, 1.0, 5.0)
+        val alpha = 0.45f + 0.55f * fade(px, 1.5, 6.0)
         val fx = x.toFloat(); val fy = y.toFloat()
-        if (px < 1.2) {
+        if (px < 1.5) {
             bodyPaint.shader = null
             bodyPaint.color = withAlpha(day, alpha)
-            canvas.drawCircle(fx, fy, (1.2 / s).toFloat(), bodyPaint)
+            canvas.drawCircle(fx, fy, (1.5 / s).toFloat(), bodyPaint)
             return
         }
         val dx = lx - x; val dy = ly - y
@@ -681,6 +679,41 @@ fun drawBodies(
             )
         }
     }
+}
+
+// ── Лесенка подписей времени (общая для рендера и отладки) ─────────────────
+val TIME_STEPS = longArrayOf(86400, 3600, 60, 1)
+
+/** Высота цифр шрифта (доля кегля) — по реальным границам глифов. */
+val DIGIT_H: Double by lazy {
+    val p = Paint(Paint.ANTI_ALIAS_FLAG)
+    p.textSize = 100f
+    val b = android.graphics.Rect()
+    p.getTextBounds("0123456789", 0, 10, b)
+    (b.bottom - b.top) / 100.0
+}
+
+/** Кегль ряда: доля своего интервала (день 0.6, мельче 0.5) — соседи не слипаются. */
+fun timeLabelFonts(outerR: Double, totalSec: Double) = DoubleArray(4) { i ->
+    (if (i == 0) 0.6 else 0.5) * 2 * PI * outerR * TIME_STEPS[i] / totalSec
+}
+
+/**
+ * Радиусы центров рядов: число дня у края, над ним (к центру) часы, минуты,
+ * секунды. Отступ от крупного ряда — 15% высоты его цифр + высота мелкой
+ * цифры: ряды не касаются ни на каком зуме.
+ */
+fun timeLabelRows(outerR: Double, totalSec: Double): DoubleArray {
+    val f = timeLabelFonts(outerR, totalSec)
+    val h = DIGIT_H
+    val rows = DoubleArray(4)
+    var edge = 0.35 * h * f[0]
+    for (i in 0..3) {
+        if (i > 0) edge += 0.15 * h * f[i - 1] + 1.0 * h * f[i]
+        rows[i] = outerR - edge - h * f[i] / 2
+        edge += h * f[i]
+    }
+    return rows
 }
 
 private fun lighten(c: Int): Int {

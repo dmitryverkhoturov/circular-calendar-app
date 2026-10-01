@@ -58,7 +58,7 @@ class WheelView(context: Context) : View(context) {
     var motion = MotionSettings()
 
     private val minS = 0.025   // видна вся Солнечная система (до Нептуна)
-    private val maxS = 200_000.0 // секунды и Земля во весь экран
+    private val maxS = 1_000_000.0 // крупные секунды, Земля во весь экран
     private val lnMin = ln(minS)
     private val lnMax = ln(maxS)
 
@@ -406,7 +406,8 @@ class WheelView(context: Context) : View(context) {
         refreshTime()
         val g = geom()
         val a = tmDyn.angleOf(tmDyn.nowFrac + secs / tmDyn.totalSec)
-        val r = g.outerR * rf
+        // rf < 0: навестись на ряд подписей №(-rf): 1 день, 2 часы, 3 минуты, 4 секунды.
+        val r = if (rf < 0) timeLabelRows(g.outerR, tmDyn.totalSec)[(-rf).toInt() - 1] else g.outerR * rf
         camS = zoom; camTh = 0.0
         camOx = width / 2.0 - zoom * cos(a) * r
         camOy = height / 2.0 - zoom * sin(a) * r
@@ -816,6 +817,21 @@ class WheelView(context: Context) : View(context) {
             }
         }
         return true
+    }
+
+    // Колесо мыши (эмулятор, ПК, мышь по Bluetooth): зум к курсору.
+    override fun onGenericMotionEvent(e: MotionEvent): Boolean {
+        if (e.actionMasked == MotionEvent.ACTION_SCROLL) {
+            val v = e.getAxisValue(MotionEvent.AXIS_VSCROLL)
+            if (v != 0f) {
+                stopAll()
+                zoomRubber(Math.pow(2.0, v * 0.35), e.x.toDouble(), e.y.toDouble())
+                zoomFx = e.x.toDouble(); zoomFy = e.y.toDouble()
+                startLoop() // вернуть в пределы, если перелетели
+                return true
+            }
+        }
+        return super.onGenericMotionEvent(e)
     }
 
     private fun fling(t: Long) {
