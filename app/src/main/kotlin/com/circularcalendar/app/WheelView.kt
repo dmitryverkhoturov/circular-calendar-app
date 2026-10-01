@@ -994,6 +994,24 @@ class WheelView(context: Context) : View(context) {
         )
     }
 
+    /**
+     * Отладка (dbg 512): сцена целиком, без плиток, синхронно — эталон для
+     * сравнения со плиточным кадром (разница = стыки и прочие ошибки плиток).
+     */
+    private fun drawReference(c: Canvas) {
+        val w = width.toDouble(); val h = height.toDouble()
+        val th = thEff()
+        val l0 = computeLod(0.0, 0.0, w, h, contentX(w / 2, h / 2, th), contentY(w / 2, h / 2, th), th)
+        val lod = Lod(l0.camScale, l0.originX, l0.originY, (flipTh * 180 / PI).toFloat(), l0.full, l0.aLo, l0.aHi,
+            l0.rMin, l0.rMax, l0.visR, density)
+        c.save()
+        c.translate((w / 2).toFloat(), (h / 2).toFloat())
+        c.rotate((th * 180 / PI).toFloat())
+        c.scale(camS.toFloat(), camS.toFloat())
+        drawWheel(c, width.toFloat(), height.toFloat(), tm, settings, events, lod)
+        c.restore()
+    }
+
     /** Динамический слой (стрелка, Солнце, планеты) — каждый кадр, живое время. */
     private fun drawBodiesInto(c: Canvas) {
         val w = width.toDouble(); val h = height.toDouble()
@@ -1143,7 +1161,8 @@ class WheelView(context: Context) : View(context) {
         val outerR = geom().outerR
         val totalSec = tm.totalSec
         var more = false
-        if (dbg and 2 == 0) more = tiles.draw(
+        if (dbg and 512 != 0) drawReference(canvas)
+        else if (dbg and 2 == 0) more = tiles.draw(
             canvas, camS, camTh, camOx, camOy, width.toDouble(), height.toDouble(),
             cvX, cvY, cvTh, cvLs,
             { i -> if (dbg and 1 != 0) 0f else tierVis(i, camS, outerR, totalSec) },

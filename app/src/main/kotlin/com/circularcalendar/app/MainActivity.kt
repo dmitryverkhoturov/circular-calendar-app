@@ -256,6 +256,7 @@ class MainActivity : Activity() {
         }
         if (intent.hasExtra("state")) android.util.Log.i("CCDBG", wheel.debugState())
         if (intent.hasExtra("dbg")) { wheel.dbg = intent.getIntExtra("dbg", 0); RDBG = wheel.dbg; wheel.update(settings, events, now) }
+        if (intent.hasExtra("preset")) PRESETS.getOrNull(intent.getIntExtra("preset", 0))?.let { applyDesign(it.second) }
         if (intent.hasExtra("hud")) wheel.perfHud = intent.getBooleanExtra("hud", false)
         if (intent.getBooleanExtra("stress", false)) {
             stress = true

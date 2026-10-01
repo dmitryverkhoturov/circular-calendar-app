@@ -39,7 +39,7 @@ const val TILE_MARGIN = 48.0
 private const val NEW_PER_FRAME = 4
 private const val CACHE_MAX = 90 // ×1 МБ видеопамяти на плитку
 private const val BASE_LEVEL = 0 // подложка: весь круг ~4 плитки, всегда в кэше
-private val WORKERS = (Runtime.getRuntime().availableProcessors() - 2).coerceIn(2, 4)
+private val WORKERS = (Runtime.getRuntime().availableProcessors() - 2).coerceIn(2, 6)
 private val SQRT2 = sqrt(2.0)
 
 fun levelScale(l: Int): Double = 2.0.pow(l / 2.0)
@@ -87,9 +87,8 @@ private class Tile(val l: Int, val i: Int, val j: Int, val tm: TimeMap) {
     /** Прежняя версия (старое поколение): видна, пока новая ждёт очереди на показ. */
     var prev: Tile? = null
 
-    /** Узлы живы (display list не выкинут системой)? */
-    fun live(): Boolean = empty || (node?.hasDisplayList() == true &&
-        (tierNodes?.all { it == null || it.hasDisplayList() } ?: true))
+    /** Главный узел (с растровым слоем) жив — display list не выкинут системой? */
+    fun live(): Boolean = empty || node?.hasDisplayList() == true
 
     /** Перезаписать узлы из сохранённых Picture (растеризуются заново при показе). */
     fun revive() {
@@ -414,8 +413,9 @@ class TileEngine(private val onReady: () -> Unit, private val post: (Runnable) -
         // Подложка: весь круг на уровне BASE_LEVEL — нужна раньше всего (последний рубеж от дыр).
         if (L != BASE_LEVEL) for (j in -1..0) for (i in -1..0) {
             val t = cache[key(BASE_LEVEL, i, j)]
-            if (t == null) addWant(BASE_LEVEL, i, j, s, th, ox, oy, w, h, -1)
-            else t.used = frame
+            if (t != null) t.used = frame
+            // Подложка обновляется со сменой поколения (тема, данные) — иначе остаётся старой навсегда.
+            if (t == null || t.gen != sc.gen) addWant(BASE_LEVEL, i, j, s, th, ox, oy, w, h, -1)
         }
 
         // Страховка от дыр: грубый уровень (в 4 раза мельче) всегда под рукой.
@@ -425,7 +425,7 @@ class TileEngine(private val onReady: () -> Unit, private val post: (Runnable) -
             if ((r4[1] - r4[0] + 1).toLong() * (r4[3] - r4[2] + 1) < 50) {
                 for (j in r4[2]..r4[3]) for (i in r4[0]..r4[1]) {
                     val t = cache[key(L4, i, j)]
-                    if (t != null) { t.used = frame; continue }
+                    if (t != null) { t.used = frame; if (t.gen == sc.gen) continue }
                     if (!emptyTile(sc, L4, i, j)) addWant(L4, i, j, s, th, ox, oy, w, h, 1)
                 }
             }
@@ -463,13 +463,14 @@ class TileEngine(private val onReady: () -> Unit, private val post: (Runnable) -
     private fun keepAlive(canvas: Canvas) {
         canvas.save()
         canvas.clipRect(0f, 0f, 0f, 0f)
-        for (t in cache.values) {
-            if (t.drawnAt == frame || !t.shown || t.empty) continue
-            val n = t.node ?: continue
-            if (!n.hasDisplayList()) continue
+        fun hold(t: Tile) {
+            if (t.drawnAt == frame || !t.shown || t.empty) return
+            val n = t.node ?: return
+            if (!n.hasDisplayList()) return
             canvas.drawRenderNode(n)
             t.tierNodes?.forEach { tn -> if (tn != null && tn.hasDisplayList()) canvas.drawRenderNode(tn) }
         }
+        for (t in cache.values) { hold(t); t.prev?.let { hold(it) } }
         canvas.restore()
     }
 
@@ -492,12 +493,21 @@ class TileEngine(private val onReady: () -> Unit, private val post: (Runnable) -
         t.node?.let { canvas.drawRenderNode(it) }
         if (RDBG and 256 != 0) canvas.drawRect(1f, 1f, TILE - 1f, TILE - 1f, dbgPaint)
         t.tierNodes?.let { tn ->
+            if (tn.any { it != null && !it.hasDisplayList() }) t.revive() // слои LOD без растра — дёшево
+            var hidden = false
             for (n in 0 until TIER_N) {
                 val node = tn[n] ?: continue
                 val a = alphas[n]
-                if (a <= 0f) continue
+                if (a <= 0f) { hidden = true; continue }
                 node.alpha = a
                 canvas.drawRenderNode(node)
+            }
+            // Погасшие слои тоже держим в дереве, иначе система выкинет их display list.
+            if (hidden) {
+                canvas.save()
+                canvas.clipRect(0f, 0f, 0f, 0f)
+                for (n in 0 until TIER_N) if (alphas[n] <= 0f) tn[n]?.let { canvas.drawRenderNode(it) }
+                canvas.restore()
             }
         }
         canvas.restore()

@@ -139,8 +139,11 @@ fun drawWheel(
 
     // ── Окна видимости ───────────────────────────────────────────────────────
     val winLen = lod.aHi - lod.aLo
-    var fLo = 0.0
-    var fHi = 1.0 - 1e-12
+    // Круг — окно ±полгода от «сейчас» (перекат года). Видно всё — то же окно,
+    // а не 0…1 текущего года: иначе недели/даты по ту сторону переката брались
+    // из другого года (день недели сдвинут на сутки) и плитки не стыковались.
+    var fLo = tm.nowFrac - 0.5
+    var fHi = tm.nowFrac + 0.5 - 1e-12
     if (!lod.full) {
         val f1 = tm.fracOfAngle(lod.aLo)
         val f2 = tm.fracOfAngle(lod.aHi)
@@ -150,6 +153,13 @@ fun drawWheel(
         val sh = floor(fLo - tm.nowFrac + 0.5)
         fLo -= sh; fHi -= sh
     }
+
+    // Номер шага (день/час…) → тот же шаг, но в «каноническом» окне ±полгода
+    // от «сейчас»: окно плитки может пересекать перекат года, и каждая риска
+    // должна сама решать, какому году принадлежит (день недели, дата, прошлое).
+    val wLo = tm.nowFrac - 0.5
+    fun canonK(k: Long, perYear: Long): Long =
+        k - floor(k.toDouble() / perYear - wLo).toLong() * perYear
 
     fun visible(fs: Double, fe: Double): Boolean {
         if (lod.full) return true
@@ -473,9 +483,10 @@ fun drawWheel(
                 val f0 = k * step / totalSec
                 val f1 = (k + 1) * step / totalSec
                 if (!visible(f0, f1)) continue
-                val text = if (i == 0) tm.yearStart.plusDays(k).dayOfMonth.toString()
+                val kc = canonK(k, Math.round(totalSec / step))
+                val text = if (i == 0) tm.yearStart.plusDays(kc).dayOfMonth.toString()
                 else "%02d".format(Math.floorMod(k, if (i == 1) 24L else 60L))
-                val fmid = (f0 + f1) / 2
+                val fmid = (kc + 0.5) * step / totalSec
                 val c = if (fmid <= nowFrac) lk.dayNumPast else lk.dayNumFuture
                 label(text, tm.angleOf(fmid), rc, (f * s).toFloat(), mulAlpha(c, vis), digits = true, cv = cv)
             }
@@ -613,7 +624,11 @@ fun drawWheel(
             val halfW = laneW / 2
             val roundK = if (ds.roundEvents) 1.0 else 0.7
             if (!buildBandPath(bandPath, lx, ly, r, halfW, a0, a1, s, ::clip, roundK)) return@forVisible
-            val ow = if (ds.outline > 0f) max(laneW * 0.16 * ds.outline, 1.1 / s) else 0.0
+            // Обводка — не толще ~2 экранных px на единицу ручки: вблизи пропорциональная
+            // толщина съедала событие, а её край вдоль среза окна плитки (запас 48px)
+            // залезал внутрь плитки — «Тушь» рассыпалась на прямоугольники.
+            val owMax = 2.2 * ds.outline * lod.density / 2.75 / s
+            val ow = if (ds.outline > 0f) min(max(laneW * 0.16 * ds.outline, 1.1 / s), max(owMax, 1.1 / s)) else 0.0
             val fillCol = if (ds.outline > 0f) mix(lk.bd.bg1, col, 0.10f) else col
             textBg = fillCol
             bandPaint.color = withAlpha(fillCol, alpha)
@@ -702,8 +717,9 @@ fun drawWheel(
                 val k0 = ceil(fLo * totalSec / 86400).toLong()
                 val k1 = floor(fHi * totalSec / 86400).toLong()
                 val dow0 = tm.yearStart.dayOfWeek.value - 1 // 0 = понедельник
+                val perYear = Math.round(totalSec / 86400)
                 for (k in k0..k1) {
-                    if (Math.floorMod(dow0 + k, 7L) != 0L) continue
+                    if (Math.floorMod(dow0 + canonK(k, perYear), 7L) != 0L) continue
                     radial(tm.angleOf(k * 86400.0 / totalSec), r0, outerR, p, cv)
                 }
             }
