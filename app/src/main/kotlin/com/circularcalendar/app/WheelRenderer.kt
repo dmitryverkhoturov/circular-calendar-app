@@ -113,8 +113,12 @@ fun drawWheel(
     // Слои LOD (риски и подписи времени) — в отдельные холсты на полной
     // яркости; их прозрачность ставится КАЖДЫЙ кадр по текущему зуму (плавное
     // проявление без перезаписи). null — рисовать всё в [canvas] с текущей яркостью.
-    tiers: Array<Canvas>? = null,
-) {
+    tiers: ((Int) -> Canvas)? = null,
+    // Диапазон зума, в котором будет показана запись (для слоёв LOD).
+    sLo: Double = lod.camScale,
+    sHi: Double = lod.camScale,
+): Int {
+    var tierMask = 0
     val lk = settings.look
     val ds = lk.d
     val g = WheelGeom(width, height)
@@ -338,11 +342,11 @@ fun drawWheel(
     // основную сцену (кэш-растр, ноль работы на кадр); отдельно, с яркостью
     // на каждый кадр, живут только проявляющиеся/гаснущие.
     fun fading(i: Int): Boolean =
-        tiers != null && tierVis(i, s / TIER_REACH, outerR, totalSec) < 1f
+        tiers != null && tierVis(i, sLo, outerR, totalSec) < 1f
     fun tv(i: Int): Float =
-        if (tiers != null) (if (tierVis(i, s * TIER_REACH, outerR, totalSec) > 0f) 1f else 0f)
+        if (tiers != null) (if (tierVis(i, sHi, outerR, totalSec) > 0f) 1f else 0f)
         else tierVis(i, s, outerR, totalSec)
-    fun tc(i: Int): Canvas = if (fading(i)) tiers!![i] else canvas
+    fun tc(i: Int): Canvas = if (fading(i)) { tierMask = tierMask or (1 shl i); tiers!!(i) } else canvas
 
     fun tickPaint(color: Int, alpha: Float, w: Float) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         this.color = withAlpha(color, alpha)
@@ -560,7 +564,6 @@ fun drawWheel(
         // а четырёхугольник в общий путь своего цвета: один drawPath на цвет.
         val tiny = HashMap<Int, Path>()
         val tinyPx = 3.0
-        var glows = 0
 
         if (RDBG and 128 == 0) events.forVisible(lod.full, fLo, fHi) { b ->
             if (!visible(b.startFrac, b.endFrac)) return@forVisible
@@ -614,11 +617,10 @@ fun drawWheel(
             val fillCol = if (ds.outline > 0f) mix(lk.bd.bg1, col, 0.10f) else col
             textBg = fillCol
             bandPaint.color = withAlpha(fillCol, alpha)
-            // Свечение (размытие) — дорогая растеризация слоя: только у заметных
-            // на экране лент и не больше GLOW_MAX на сцену; у мелких его не видно.
-            if (RDBG and 32 == 0 && glowLocal > 0f && !isPast && lenPx >= 12 && glows < GLOW_MAX) {
+            // Свечение (размытие) растеризуется один раз на плитку. Крошечные
+            // (<3px) ленты идут пачкой выше и свечения не имеют — его не видно.
+            if (RDBG and 32 == 0 && glowLocal > 0f && !isPast) {
                 bandPaint.setShadowLayer(glowLocal * 0.7f, 0f, 0f, withAlpha(col, 0.85f))
-                glows++
             }
             canvas.drawPath(bandPath, bandPaint)
             bandPaint.clearShadowLayer()
@@ -713,6 +715,7 @@ fun drawWheel(
         if (secVis > 0f) timeTicksFrom(1, 60, tickPaint(line, ta * 0.75f * secVis, lineW(0.08)), tc(TIER_SEC))
     }
 
+    return tierMask
 }
 
 /**
@@ -903,8 +906,6 @@ const val TIER_MIN = 3
 const val TIER_SEC = 4
 const val TIER_LABEL0 = 5 // 5..8 — подписи дня, часа, минуты, секунды
 const val TIER_N = 9
-/** Запас зума, на который слои пишутся заранее (перезапись — раньше, при ×1.12). */
-const val TIER_REACH = 1.35
 
 private fun fadeF(v: Double, lo: Double, hi: Double): Float = ((v - lo) / (hi - lo)).coerceIn(0.0, 1.0).toFloat()
 
@@ -1008,8 +1009,18 @@ private fun buildBandPath(
     // короткое событие становится узким скруглённым столбиком, а не кругом.
     val cr = min(halfW * roundK, abs(sweep) * r / 2)
     val ca = (cr / r) * sgn
-    val startCut = c[0] != a0
-    val endCut = c[1] != a1
+    var startCut = c[0] != a0
+    var endCut = c[1] != a1
+    // Срез внутри зоны скругления своего конца — рисуем этот конец целиком
+    // (иначе контур загибается назад и заливка «выедается» на стыке плиток).
+    if (startCut && sgn * (c[0] - (a0 + ca)) < 0) startCut = false
+    if (endCut && sgn * ((a1 - ca) - c[1]) < 0) endCut = false
+    // Срез попал в скругление ПРОТИВОПОЛОЖНОГО конца — переносим его на начало
+    // скругления: точка всё равно за краем окна, а контур остаётся простым.
+    var cs = if (startCut) c[0] else a0
+    var ce = if (endCut) c[1] else a1
+    if (startCut && sgn * ((a1 - ca) - cs) < 0) cs = a1 - ca
+    if (endCut && sgn * (ce - (a0 + ca)) < 0) ce = a0 + ca
 
     fun x(a: Double, rad: Double): Float = (cx + cos(a) * rad).toFloat()
     fun y(a: Double, rad: Double): Float = (cy + sin(a) * rad).toFloat()
@@ -1029,15 +1040,15 @@ private fun buildBandPath(
     }
 
     path.reset()
-    arcPoly(path, cx, cy, ro, if (startCut) c[0] else a0 + ca, if (endCut) c[1] else a1 - ca, scale, true)
+    arcPoly(path, cx, cy, ro, if (startCut) cs else a0 + ca, if (endCut) ce else a1 - ca, scale, true)
     if (!endCut) {
         corner(a1 - ca, ro, a1, ro, a1, ro - cr)
         path.lineTo(x(a1, ri + cr), y(a1, ri + cr))
         corner(a1, ri + cr, a1, ri, a1 - ca, ri)
     } else {
-        path.lineTo(x(c[1], ri), y(c[1], ri))
+        path.lineTo(x(ce, ri), y(ce, ri))
     }
-    arcPoly(path, cx, cy, ri, if (endCut) c[1] else a1 - ca, if (startCut) c[0] else a0 + ca, scale, false)
+    arcPoly(path, cx, cy, ri, if (endCut) ce else a1 - ca, if (startCut) cs else a0 + ca, scale, false)
     if (!startCut) {
         corner(a0 + ca, ri, a0, ri, a0, ri + cr)
         path.lineTo(x(a0, ro - cr), y(a0, ro - cr))
@@ -1138,7 +1149,6 @@ private fun drawBandTitle(
 }
 
 private const val TEXT_MIN_SCREEN_FS = 5.0
-private const val GLOW_MAX = 48
 private const val TEXT_MAX_SCREEN_FS = 1500.0
 
 /** Раскладка названия события (кэшируется в [EventBand.title]). */
@@ -1245,3 +1255,4 @@ class EventIndex(bands: List<EventBand>) {
 }
 
 @Volatile var RDBG = 0 // отладка рендера сцены (см. WheelView.dbg)
+

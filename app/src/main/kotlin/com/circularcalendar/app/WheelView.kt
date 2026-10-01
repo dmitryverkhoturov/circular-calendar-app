@@ -70,18 +70,10 @@ class WheelView(context: Context) : View(context) {
     private val lnMin = ln(minS)
     private val lnMax = ln(maxS)
 
-    private var node = RenderNode("wheel").apply {
-        setUseCompositingLayer(true, Paint(Paint.FILTER_BITMAP_FLAG))
-    }
-    // Предыдущая сцена: рисуется ПОД текущей там, где текущая кончилась, —
-    // при быстром броске новая запись может не успеть, и без неё были бы дыры.
-    private var prevNode = RenderNode("wheelPrev").apply {
-        setUseCompositingLayer(true, Paint(Paint.FILTER_BITMAP_FLAG))
-    }
-    private var prevValid = false
-    private var pS = 1.0; private var pTh = 0.0; private var pOx = 0.0; private var pOy = 0.0
-    private val prevDeltaM = Matrix()
-    private val invM = Matrix()
+    // Плитки (см. Tiles.kt): сцена кэшируется кусками на уровнях зума.
+    private val tiles = TileEngine({ invalidate() }, { r -> post(r) })
+    private var sceneGen = 0
+    private var flipTh = 0.0 // поворот, по которому решён переворот подписей
 
     // Скорость камеры (экранные px/с, рад/с, ln зума/с) — для записи с упреждением.
     private var cvX = 0.0; private var cvY = 0.0; private var cvTh = 0.0; private var cvLs = 0.0
@@ -101,12 +93,6 @@ class WheelView(context: Context) : View(context) {
         }
         cvPrevNs = nowNs; cvPS = camS; cvPTh = camTh; cvPOx = camOx; cvPOy = camOy
     }
-
-    /** На сколько секунд вперёд писать сцену: время записи с запасом. */
-    private fun lead(): Double = if (running || touching) min(lastRecordMs * 1.5 + 30, 400.0) / 1000 else 0.0
-    // Слои LOD (риски/подписи времени): без растрового кэша, яркость — каждый
-    // кадр через alpha узла (плавное проявление без перезаписи сцены).
-    private val tierNodes = Array(TIER_N) { RenderNode("tier$it").apply { setHasOverlappingRendering(false) } }
 
     private var settings = WheelSettings()
     private var events = EventIndex(emptyList())
@@ -130,25 +116,7 @@ class WheelView(context: Context) : View(context) {
         }
     }
 
-    // Параметры последней записи сцены.
     private var sceneDirty = true
-    private var recS = 1.0
-    private var recTh = 0.0
-    private var recOx = 0.0
-    private var recOy = 0.0
-    private var nodeLeft = 0
-    private var nodeTop = 0
-    private var nodeSize = 0
-    private var crispPending = false
-    private var hasScene = false
-
-    // Запись сцены — в фоновом потоке (в Picture), UI только подменяет готовое.
-    private val worker = HandlerThread("scene").apply { start() }
-    private val workerH = Handler(worker.looper)
-    private var jobBusy = false
-    private var jobAgain = false
-
-    private val deltaM = Matrix()
     private val tmpVals = FloatArray(9)
     private val density = resources.displayMetrics.density
 
@@ -460,7 +428,6 @@ class WheelView(context: Context) : View(context) {
         camS = zoom; camTh = th
         camOx = width / 2.0 - zoom * cos(a + th) * r
         camOy = height / 2.0 - zoom * sin(a + th) * r
-        sceneDirty = true
         invalidate()
     }
 
@@ -525,8 +492,9 @@ class WheelView(context: Context) : View(context) {
         startLoop()
     }
 
+    /** Движение кончилось: если поворот заметно сменился — переписать подписи под него. */
     private fun requestCrisp() {
-        crispPending = true
+        if (abs(TileEngine.wrap(thEff() - flipTh)) > 0.15) sceneDirty = true
         invalidate()
     }
 
@@ -935,6 +903,7 @@ class WheelView(context: Context) : View(context) {
         this.events = EventIndex(buildEventBands(filtered, now.year, tm.nowFrac, settings.largeEventsOnTop))
         bgKey = null
         sceneDirty = true
+        dataChanged = true
         invalidate()
     }
 
@@ -992,161 +961,31 @@ class WheelView(context: Context) : View(context) {
         return height / 2.0 + (-sin(th) * dx + cos(th) * dy) / s
     }
 
-    /** Дельта: экран на момент записи → экран сейчас. */
-    private fun computeDelta(
-        m: Matrix = deltaM, recS: Double = this.recS, recTh: Double = this.recTh,
-        recOx: Double = this.recOx, recOy: Double = this.recOy,
-    ) {
-        val k = camS / recS
-        val d = thEff() - recTh
-        val a = k * cos(d); val bb = k * sin(d)
-        val tx = camOx - (a * recOx - bb * recOy)
-        val ty = camOy - (bb * recOx + a * recOy)
-        tmpVals[0] = a.toFloat(); tmpVals[1] = (-bb).toFloat(); tmpVals[2] = tx.toFloat()
-        tmpVals[3] = bb.toFloat(); tmpVals[4] = a.toFloat(); tmpVals[5] = ty.toFloat()
-        tmpVals[6] = 0f; tmpVals[7] = 0f; tmpVals[8] = 1f
-        m.setValues(tmpVals)
-    }
-
-    /** Экран (через обратную дельту) не подходит к краю квадрата слоя ближе [m] px? */
-    private fun screenInsideNode(m: Double): Boolean {
-        if (nodeSize <= 0) return false
-        val k = camS / recS
-        val d = thEff() - recTh
-        val c = cos(-d) / k; val sn = sin(-d) / k
-        val xs = doubleArrayOf(0.0, width.toDouble(), width.toDouble(), 0.0)
-        val ys = doubleArrayOf(0.0, 0.0, height.toDouble(), height.toDouble())
-        for (i in 0..3) {
-            val dx = xs[i] - camOx; val dy = ys[i] - camOy
-            val x = recOx + c * dx - sn * dy
-            val y = recOy + sn * dx + c * dy
-            if (x < nodeLeft + m || y < nodeTop + m ||
-                x > nodeLeft + nodeSize - m || y > nodeTop + nodeSize - m
-            ) return false
-        }
-        return true
-    }
-
-    private fun deltaNontrivial(): Boolean {
-        if (abs(camS / recS - 1) > 0.005) return true
-        if (abs(thEff() - recTh) > 0.003) return true
-        computeDelta()
-        deltaM.getValues(tmpVals)
-        return abs(tmpVals[2]) > 0.5f || abs(tmpVals[5]) > 0.5f
-    }
-
-    /**
-     * Пора готовить новую сцену? Порог — с упреждением: перезапись начинается
-     * при ×1.12 зума или подходе экрана к краю слоя, а не когда старый слой
-     * уже исчерпан, — фон успевает, кадр не ждёт.
-     */
-    private fun rerecordNeeded(): Boolean {
-        if (sceneDirty) return true
-        val ratio = camS / recS
-        if (ratio > 1.12 || ratio < 1 / 1.12) return true
-        // Чем быстрее едем, тем раньше начинаем: запас = путь за время записи.
-        val ld = lead()
-        val diag = hypot(width.toDouble(), height.toDouble())
-        val reach = (hypot(cvX, cvY) + abs(cvTh) * diag / 2 + abs(cvLs) * diag / 2) * ld
-        return !screenInsideNode(0.035 * nodeSize + reach)
-    }
-
-    /** Снимок всего, что нужно для записи сцены, — фоновый поток не трогает поля View. */
-    private class SceneJob(
-        val w: Int, val h: Int, val s: Double, val th: Double, val ox: Double, val oy: Double,
-        val settings: WheelSettings, val tm: TimeMap, val events: EventIndex,
-    )
-
-    private class SceneResult(val job: SceneJob, val main: Picture, val tiers: Array<Picture>, val ms: Double)
-
-    private fun nodeSizeFor(w: Int, h: Int) = ceil(hypot(w.toDouble(), h.toDouble()) * 1.12).toInt()
-
-    /** Пишет сцену в Picture: локальное начало = контент под центром экрана. Любой поток. */
-    private fun renderJob(j: SceneJob): SceneResult {
-        val t0 = System.nanoTime()
-        val size = nodeSizeFor(j.w, j.h)
-        val left = (j.w - size) / 2; val top = (j.h - size) / 2
-        val w = j.w.toDouble(); val h = j.h.toDouble()
-        val lod = computeLod(
-            left.toDouble(), top.toDouble(), (left + size).toDouble(), (top + size).toDouble(),
-            contentX(w / 2, h / 2, j.th, j.s, j.ox, j.oy), contentY(w / 2, h / 2, j.th, j.s, j.ox, j.oy), j.th,
-            j.s, j.ox, j.oy,
+    /** LOD плитки (l,i,j): виртуальная камера уровня без поворота, «экран» = плитка. */
+    private fun tileLod(sc: TileScene, l: Int, i: Int, j: Int): Lod {
+        val sL = levelScale(l)
+        val g = WheelGeom(sc.w, sc.h)
+        // Пиксели уровня: q = (p − C)·sL; центр круга в пикселях плитки = (−iT, −jT).
+        val cx = -i.toDouble() * TILE; val cy = -j.toDouble() * TILE
+        val oxC = g.cx + i.toDouble() * TILE / sL
+        val oyC = g.cy + j.toDouble() * TILE / sL
+        // Окно с запасом: свечение и края подписей соседей заходят в плитку.
+        val m = TILE_MARGIN
+        val lod = computeLod(-m, -m, TILE + m, TILE + m, oxC, oyC, 0.0, sL, cx, cy)
+        return Lod(
+            lod.camScale, lod.originX, lod.originY, sc.flipDeg, lod.full, lod.aLo, lod.aHi,
+            lod.rMin, lod.rMax, lod.visR, sc.density,
         )
-        fun begin(p: Picture): Canvas = p.beginRecording(size, size).apply {
-            translate(-left.toFloat(), -top.toFloat())
-            translate((w / 2).toFloat(), (h / 2).toFloat())
-            rotate((j.th * 180 / PI).toFloat())
-            scale(j.s.toFloat(), j.s.toFloat())
-        }
-        val main = Picture()
-        val tiers = Array(TIER_N) { Picture() }
-        val mc = begin(main)
-        val tcs = Array(TIER_N) { begin(tiers[it]) }
-        drawWheel(mc, j.w.toFloat(), j.h.toFloat(), j.tm, j.settings, j.events, lod, tcs)
-        main.endRecording()
-        for (p in tiers) p.endRecording()
-        return SceneResult(j, main, tiers, (System.nanoTime() - t0) / 1e6)
     }
 
-    private fun snapshotJob(): SceneJob {
+    private fun newScene(drop: Boolean) {
         sceneDirty = false
-        // Пишем туда, где камера БУДЕТ к готовности записи (а не где она сейчас).
-        val ld = lead()
-        val ls = (cvLs * ld).coerceIn(-0.5, 0.5)
-        return SceneJob(
-            width, height, camS * exp(ls), thEff() + cvTh * ld, camOx + cvX * ld, camOy + cvY * ld,
-            settings, tm, events,
+        sceneGen++
+        flipTh = thEff()
+        tiles.setScene(
+            TileScene(sceneGen, width.toFloat(), height.toFloat(), settings, tm, events, (flipTh * 180 / PI).toFloat(), density),
+            drop,
         )
-    }
-
-    /** Запустить фоновую запись (одна в работе; новые просьбы склеиваются). */
-    private fun requestRecord() {
-        if (jobBusy) { jobAgain = true; return }
-        jobBusy = true; jobAgain = false
-        val job = snapshotJob()
-        workerH.post {
-            val r = renderJob(job)
-            post { applyResult(r) }
-        }
-    }
-
-    /** UI-поток: готовую Picture — в узлы (копирование списка команд, дёшево). */
-    private fun applyResult(r: SceneResult) {
-        jobBusy = false
-        val j = r.job
-        if (j.w == width && j.h == height) {
-            val t0 = System.nanoTime()
-            nodeSize = nodeSizeFor(j.w, j.h)
-            nodeLeft = (j.w - nodeSize) / 2
-            nodeTop = (j.h - nodeSize) / 2
-            fun fill(n: RenderNode, p: Picture) {
-                n.setPosition(nodeLeft, nodeTop, nodeLeft + nodeSize, nodeTop + nodeSize)
-                val c = n.beginRecording(nodeSize, nodeSize)
-                try { c.drawPicture(p) } finally { n.endRecording() }
-            }
-            if (hasScene) {
-                // Текущая сцена становится подложкой; её слой не перерисовывается.
-                val old = node; node = prevNode; prevNode = old
-                pS = recS; pTh = recTh; pOx = recOx; pOy = recOy
-                prevValid = true
-            }
-            fill(node, r.main)
-            for (i in 0 until TIER_N) fill(tierNodes[i], r.tiers[i])
-            recS = j.s; recTh = j.th; recOx = j.ox; recOy = j.oy
-            hasScene = true
-            lastRecordMs = r.ms
-            android.util.Log.i("CCPERF", "record %.1f ms (bg), apply %.1f ms, s=%.2f".format(r.ms, (System.nanoTime() - t0) / 1e6, j.s))
-            invalidate()
-        } else sceneDirty = true
-        // Пока писали, камера ушла или пришли новые данные — следующая запись
-        // со свежим снимком (в т.ч. «чёткость в покое»).
-        if (jobAgain) requestRecord()
-    }
-
-    /** Синхронная запись (первый кадр — показывать ещё нечего). */
-    private fun recordSceneNow() {
-        if (width <= 0 || height <= 0) return
-        applyResult(renderJob(snapshotJob()))
     }
 
     /** Динамический слой (стрелка, Солнце, планеты) — каждый кадр, живое время. */
@@ -1160,6 +999,9 @@ class WheelView(context: Context) : View(context) {
         drawBodies(c, width.toFloat(), height.toFloat(), tmDyn, settings, lod)
         c.restore()
     }
+
+    private var lastW = 0
+    private var lastH = 0
 
     // ── Фон и зерно — в ЭКРАННЫХ координатах (не зумятся вместе с кругом) ───
     private var bgKey: Any? = null
@@ -1223,35 +1065,40 @@ class WheelView(context: Context) : View(context) {
         set(v) { field = v; invalidate() }
     private val frameDt = LongArray(240)
     private val frameAt = LongArray(240)
+    private val frameFb = IntArray(240)   // плиток подложкой в кадре
+    private val frameHole = IntArray(240) // дыр в кадре
     private var frameN = 0
     private var lastDrawNs = 0L
     private var drawCostNs = 0L
-    private var lastRecordMs = 0.0
     private val hudPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = WHITE; textSize = 13f * resources.displayMetrics.density }
     private val hudBg = Paint().apply { color = 0x99000000.toInt() }
 
     private fun drawHud(canvas: Canvas, now: Long) {
         // Кадры за последние 2 с движения: средний fps и «рывки» (> 2 кадров 60 Гц).
-        var n = 0; var sum = 0L; var jank = 0; var worst = 0L
+        var n = 0; var sum = 0L; var jank = 0; var worst = 0L; var fbFrames = 0; var holeFrames = 0
         for (i in 0 until min(frameN, frameDt.size)) {
             val k = Math.floorMod(frameN - 1 - i, frameDt.size)
             if (now - frameAt[k] > 2_000_000_000L) break
             val d = frameDt[k]
             if (d > 250_000_000L) continue // простой, не кадр анимации
             n++; sum += d; worst = max(worst, d)
+            if (frameFb[k] > 0) fbFrames++
+            if (frameHole[k] > 0) holeFrames++
             if (d > 33_000_000L) jank++
         }
         val fps = if (n > 0) 1e9 * n / sum else 0.0
         val lines = arrayOf(
             "fps %.0f".format(fps),
             "рывков >33мс: $jank",
+            "кадров с размытым: $fbFrames, с дырой: $holeFrames",
             "худший кадр: %.0f мс".format(worst / 1e6),
             "onDraw: %.1f мс".format(drawCostNs / 1e6),
-            "сцена (фон): %.0f мс".format(lastRecordMs),
+            "плитка (фон): %.0f мс".format(tiles.lastJobMs),
+            "плиток: %d, в работе %d".format(tiles.cachedCount, tiles.pendingCount),
         )
         val d = resources.displayMetrics.density
         val lh = hudPaint.textSize * 1.25f
-        val w = 170f * d
+        val w = 230f * d
         val x = width - w - 12f * d; val y = 40f * d
         canvas.drawRect(x - 8f * d, y - lh, x + w, y + lh * (lines.size - 0.5f), hudBg)
         for (i in lines.indices) canvas.drawText(lines[i], x, y + i * lh, hudPaint)
@@ -1263,6 +1110,8 @@ class WheelView(context: Context) : View(context) {
         if (lastDrawNs != 0L) {
             frameDt[frameN % frameDt.size] = t0 - lastDrawNs
             frameAt[frameN % frameAt.size] = t0
+            frameFb[frameN % frameFb.size] = tiles.lastFallbacks
+            frameHole[frameN % frameHole.size] = tiles.lastHoles
             frameN++
         }
         lastDrawNs = t0
@@ -1276,66 +1125,33 @@ class WheelView(context: Context) : View(context) {
         refreshTime()
         if (dbg and 8 == 0) drawBackdrop(canvas)
 
-        if (!canvas.isHardwareAccelerated) {
-            val r = renderJob(snapshotJob())
-            canvas.save()
-            canvas.translate(((width - nodeSizeFor(width, height)) / 2).toFloat(), ((height - nodeSizeFor(width, height)) / 2).toFloat())
-            canvas.drawPicture(r.main)
-            for (i in 0 until TIER_N) {
-                val a = tierVis(i, camS, geom().outerR, tm.totalSec)
-                if (a > 0f) { canvas.saveLayerAlpha(null, (a * 255).toInt()); canvas.drawPicture(r.tiers[i]); canvas.restore() }
-            }
-            canvas.restore()
-            drawBodiesInto(canvas)
-            drawGrain(canvas)
-            return
+        if (width != lastW || height != lastH) { lastW = width; lastH = height; newScene(true) }
+        // Новые данные — сразу; переворот подписей — только в покое.
+        // Старые плитки видны, пока их не заменят свежие.
+        else if (sceneDirty && (dataChanged || tiles.scene == null || (!running && !touching))) {
+            dataChanged = false
+            newScene(false)
         }
 
-        if (!hasScene) recordSceneNow()
-        else {
-            var rerecord = rerecordNeeded()
-            // В покое — перезапись для идеальной чёткости (только когда никуда не едем).
-            if (crispPending && !running && !touching) {
-                if (!rerecord && deltaNontrivial()) rerecord = true
-                crispPending = false
-            }
-            if (rerecord) requestRecord()
-        }
-
-        computeDelta()
-        if (prevValid && prevNode.hasDisplayList() && !screenInsideNode(0.0)) {
-            computeDelta(prevDeltaM, pS, pTh, pOx, pOy)
-            canvas.save()
-            canvas.concat(deltaM)
-            canvas.clipOutRect(nodeLeft, nodeTop, nodeLeft + nodeSize, nodeTop + nodeSize)
-            if (deltaM.invert(invM)) {
-                canvas.concat(invM)
-                canvas.concat(prevDeltaM)
-                canvas.drawRenderNode(prevNode)
-            }
-            canvas.restore()
-        }
-        if (node.hasDisplayList()) {
-            canvas.save()
-            canvas.concat(deltaM)
-            if (dbg and 2 == 0) canvas.drawRenderNode(node)
-            val outerR = geom().outerR
-            if (dbg and 1 == 0) for (i in 0 until TIER_N) {
-                val n = tierNodes[i]
-                if (!n.hasDisplayList()) continue
-                val a = tierVis(i, camS, outerR, tm.totalSec)
-                if (a <= 0f) continue
-                n.setAlpha(a)
-                canvas.drawRenderNode(n)
-            }
-            canvas.restore()
-        }
+        val outerR = geom().outerR
+        val totalSec = tm.totalSec
+        var more = false
+        if (dbg and 2 == 0) more = tiles.draw(
+            canvas, camS, thEff(), camOx, camOy, width.toDouble(), height.toDouble(),
+            cvX, cvY, cvTh, cvLs,
+            { i -> if (dbg and 1 != 0) 0f else tierVis(i, camS, outerR, totalSec) },
+            ::tileLod,
+        )
         if (dbg and 4 == 0) drawBodiesInto(canvas)
         drawGrain(canvas)
 
+        // Плитки догружаются — следующий кадр (вводятся порциями).
+        if (more) postInvalidateOnAnimation()
         // На глубоком зуме время видно глазом — плавно, каждый кадр.
         if (timePxPerSec() > 0.05) postInvalidateOnAnimation()
     }
+
+    private var dataChanged = false
 
     override fun onDetachedFromWindow() {
         running = false
@@ -1344,6 +1160,6 @@ class WheelView(context: Context) : View(context) {
 
     /** Вызывать из onDestroy активности: остановить поток записи сцены. */
     fun release() {
-        worker.quitSafely()
+        tiles.shutdown()
     }
 }
