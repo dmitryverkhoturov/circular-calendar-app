@@ -300,5 +300,20 @@ fun buildMockEvents(year: Int): List<CalendarEvent> {
         CalendarEvent("m15", "Курс английского", d(year, 6, 1), d(year, 6, 30), green, "edu"),
         CalendarEvent("m16", "Пробежки", d(year, 6, 1), d(year, 8, 31), teal, "health"),
         CalendarEvent("m17", "Диета", d(year, 6, 15), d(year, 7, 15), orange, "health"),
+    ) + shortMock(blue, green, orange, teal)
+}
+
+/** Короткие (< дня) события вокруг «сегодня» — чтобы мок показывал и их. */
+private fun shortMock(vararg c: Int): List<CalendarEvent> {
+    val t = LocalDateTime.now().toLocalDate().atStartOfDay()
+    fun at(day: Long, h: Int, m: Int) = t.plusDays(day).withHour(h).withMinute(m)
+    return listOf(
+        CalendarEvent("s1", "Созвон с командой", at(0, 10, 0), at(0, 11, 0), c[0], "work"),
+        CalendarEvent("s2", "Обед", at(0, 13, 0), at(0, 14, 0), c[1], "personal"),
+        CalendarEvent("s3", "Стоматолог", at(1, 9, 30), at(1, 10, 15), c[2], "personal"),
+        CalendarEvent("s4", "Тренировка", at(1, 18, 0), at(1, 19, 30), c[3], "health"),
+        CalendarEvent("s5", "Ревью", at(1, 18, 30), at(1, 19, 0), c[0], "work"),
+        CalendarEvent("s6", "Звонок маме", at(2, 20, 0), at(2, 20, 15), c[1], "personal"),
+        CalendarEvent("s7", "Йога", at(-1, 8, 0), at(-1, 9, 0), c[3], "health"),
     )
 }

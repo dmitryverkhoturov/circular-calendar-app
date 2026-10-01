@@ -402,39 +402,19 @@ fun drawWheel(
         canvas.restore()
     }
 
-    // ── Лучи по дням: длина = занятость дня, наложения темнее/светлее ───────
+    // ── Лучи: тонкая линия на каждый день, от дырки до края (настроение
+    // обложки — частые тонкие штрихи; не веер и не занятость).
     if (ds.rays) {
-        val load = FloatArray(367)
-        for (b in bands) {
-            val d0 = floor(b.startFrac * totalSec / 86400).toInt()
-            val d1 = ceil(b.endFrac * totalSec / 86400).toInt()
-            val w = if (b.endFrac - b.startFrac >= LARGE_BAND_FRAC) 1f else 0.5f
-            for (d in max(d0, 0)..min(d1 - 1, 366)) load[d] += w
-        }
         val rayPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            strokeWidth = lineW(1.15)
-            blendMode = if (lk.dark) android.graphics.BlendMode.SCREEN else android.graphics.BlendMode.MULTIPLY
+            strokeWidth = lineW(0.55, 0.8)
+            color = withAlpha(lk.accent, if (lk.dark) 0.30f else 0.42f)
         }
-        val r0 = max(holeR, outerR * 0.06)
+        val r0 = if (ds.ring) holeR else outerR * 0.06
         val nDays = (totalSec / 86400).toInt()
-        for (d in 0 until nDays) {
-            val f = (d + 0.5) * 86400 / totalSec
+        for (d in 0..nDays) {
+            val f = d * 86400 / totalSec
             if (!visible(f - 0.002, f + 0.002)) continue
-            val past = f < nowFrac
-            val len = outerR * (0.42 + 0.19 * min(load[d], 3f)) * (if (past) 0.92 else 1.0)
-            rayPaint.color = withAlpha(lk.accent, if (past) 0.45f else 0.8f)
-            radial(tm.angleOf(f), r0, len, rayPaint)
-        }
-        if (lod.rMin < outerR * 0.3) {
-            val cr = (outerR * 0.3).toFloat()
-            canvas.drawCircle(lx.toFloat(), ly.toFloat(), cr, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                blendMode = rayPaint.blendMode
-                shader = RadialGradient(
-                    lx.toFloat(), ly.toFloat(), cr,
-                    intArrayOf(withAlpha(mix(lk.accent, BLACK, 0.35f), 0.85f), withAlpha(lk.accent, 0f)),
-                    null, Shader.TileMode.CLAMP,
-                )
-            })
+            radial(tm.angleOf(f), r0, outerR, rayPaint)
         }
     }
 
@@ -546,7 +526,7 @@ fun drawWheel(
     val bandW = (if (ds.rays) 5.0 else 7.0) * unit
     val bandGap = 1.5 * unit
     val laneGap = 0.6 * unit
-    val eventBandBaseR = outerR - 6.5 * unit
+    val eventBandBaseR = eventBaseR(outerR, totalSec, digitH)
 
     if (bands.isNotEmpty()) {
         val minBandR = max(g.innerR, holeR) + bandW / 2 + bandGap
@@ -576,7 +556,7 @@ fun drawWheel(
             }
 
             val sweepFrac = b.endFrac - b.startFrac
-            if (sweepFrac * pxPerFrac < 0.5 && !ds.roundEvents) continue
+            if (sweepFrac * pxPerFrac < 0.5) continue
 
             val rRow = (eventBandBaseR - b.layer * (bandW + bandGap) - bandW / 2)
                 .coerceIn(minBandR, eventBandBaseR)
@@ -593,62 +573,35 @@ fun drawWheel(
             val col = lk.eventColor(b.event.color, b.event.calendarId)
             var textBg = col
 
-            if (ds.roundEvents) {
-                // «Пилюля»: круглые концы, общая длина = точная длина события.
-                val halfW = laneW / 2
-                val capA = halfW / r
-                val sgn = if (a1 >= a0) 1.0 else -1.0
-                val dot = abs(a1 - a0) <= 2 * capA
-                val ow = if (ds.outline > 0f) max(laneW * 0.22 * ds.outline, 1.1 / s) else 0.0
-                val fillCol = if (ds.outline > 0f) mix(lk.bd.bg1, col, 0.10f) else col
-                textBg = fillCol
-                if (glowLocal > 0f && !isPast) {
-                    bandPaint.setShadowLayer(glowLocal * 0.7f, 0f, 0f, withAlpha(col, 0.85f))
-                    strokePaint.setShadowLayer(glowLocal * 0.7f, 0f, 0f, withAlpha(col, 0.85f))
-                }
-                if (dot) {
-                    val am = (a0 + a1) / 2
-                    if (!angleVisible(am)) { bandPaint.clearShadowLayer(); strokePaint.clearShadowLayer(); continue }
-                    if (halfW * s < 0.6) { bandPaint.clearShadowLayer(); strokePaint.clearShadowLayer(); continue }
-                    val cxp = px(am, r); val cyp = py(am, r)
-                    if (ow > 0) {
-                        bandPaint.color = withAlpha(col, alpha)
-                        canvas.drawCircle(cxp, cyp, halfW.toFloat(), bandPaint)
-                        bandPaint.clearShadowLayer()
-                        bandPaint.color = withAlpha(fillCol, alpha)
-                        canvas.drawCircle(cxp, cyp, (halfW - ow).toFloat().coerceAtLeast(0f), bandPaint)
-                    } else {
-                        bandPaint.color = withAlpha(col, alpha)
-                        canvas.drawCircle(cxp, cyp, halfW.toFloat(), bandPaint)
-                    }
-                } else {
-                    val c = clip(a0 + sgn * capA, a1 - sgn * capA)
-                    if (c == null) { bandPaint.clearShadowLayer(); strokePaint.clearShadowLayer(); continue }
+            // Форма: изогнутый squircle точной длины. «Пилюли» — скругление на
+            // всю полуширину; короткое событие сужается с боков (не круг).
+            val halfW = laneW / 2
+            val roundK = if (ds.roundEvents) 1.0 else 0.7
+            if (!buildBandPath(bandPath, lx, ly, r, halfW, a0, a1, s, ::clip, roundK)) continue
+            val ow = if (ds.outline > 0f) max(laneW * 0.16 * ds.outline, 1.1 / s) else 0.0
+            val fillCol = if (ds.outline > 0f) mix(lk.bd.bg1, col, 0.10f) else col
+            textBg = fillCol
+            bandPaint.color = withAlpha(fillCol, alpha)
+            if (glowLocal > 0f && !isPast) bandPaint.setShadowLayer(glowLocal * 0.7f, 0f, 0f, withAlpha(col, 0.85f))
+            canvas.drawPath(bandPath, bandPaint)
+            bandPaint.clearShadowLayer()
+            if (ow > 0) {
+                strokePaint.strokeCap = Paint.Cap.BUTT
+                strokePaint.strokeJoin = Paint.Join.ROUND
+                strokePaint.strokeWidth = (ow * 1.6).toFloat()
+                strokePaint.color = withAlpha(col, alpha)
+                canvas.drawPath(bandPath, strokePaint)
+            } else if (ds.volume > 0f && abs(a1 - a0) * r > laneW * 2) {
+                // Мультяшный блик: светлая полоска по внешней кромке.
+                val capA = halfW / r * (if (a1 >= a0) 1.0 else -1.0)
+                clip(a0 + capA, a1 - capA)?.let { c ->
                     bandPath.reset()
-                    arcPoly(bandPath, lx, ly, r, c[0], c[1], s, true)
-                    strokePaint.strokeWidth = laneW.toFloat()
-                    strokePaint.color = withAlpha(col, alpha)
+                    arcPoly(bandPath, lx, ly, r + halfW * 0.5, c[0], c[1], s, true)
+                    strokePaint.strokeCap = Paint.Cap.ROUND
+                    strokePaint.strokeWidth = (laneW * 0.13).toFloat()
+                    strokePaint.color = withAlpha(WHITE, 0.30f * ds.volume * alpha)
                     canvas.drawPath(bandPath, strokePaint)
-                    strokePaint.clearShadowLayer()
-                    if (ow > 0) {
-                        strokePaint.strokeWidth = (laneW - 2 * ow).toFloat().coerceAtLeast(0f)
-                        strokePaint.color = withAlpha(fillCol, alpha)
-                        canvas.drawPath(bandPath, strokePaint)
-                    } else if (ds.volume > 0f) {
-                        // Мультяшный блик: светлая полоска по внешней кромке.
-                        bandPath.reset()
-                        arcPoly(bandPath, lx, ly, r + halfW * 0.45, c[0], c[1], s, true)
-                        strokePaint.strokeWidth = (laneW * 0.14).toFloat()
-                        strokePaint.color = withAlpha(WHITE, 0.30f * ds.volume * alpha)
-                        canvas.drawPath(bandPath, strokePaint)
-                    }
                 }
-                bandPaint.clearShadowLayer(); strokePaint.clearShadowLayer()
-            } else {
-                if (sweepFrac * pxPerFrac < 0.5) continue
-                bandPaint.color = withAlpha(col, alpha)
-                if (!buildBandPath(bandPath, lx, ly, r, laneW / 2, a0, a1, s, ::clip)) continue
-                canvas.drawPath(bandPath, bandPaint)
             }
 
             drawBandTitle(
@@ -699,7 +652,7 @@ fun drawWheel(
         }
         if (!ds.rays) {
             if (weekVis > 0f) {
-                val p = tickPaint(line, ta * 1.5f * weekVis, lineW(0.5))
+                val p = tickPaint(line, ta * 2.6f * weekVis, lineW(0.55, 1.0))
                 val k0 = ceil(fLo * totalSec / 86400).toLong()
                 val k1 = floor(fHi * totalSec / 86400).toLong()
                 val dow0 = tm.yearStart.dayOfWeek.value - 1 // 0 = понедельник
@@ -708,11 +661,12 @@ fun drawWheel(
                     radial(tm.angleOf(k * 86400.0 / totalSec), r0, outerR, p)
                 }
             }
-            if (dayVis > 0f) timeTicksFrom(86400, 0, tickPaint(line, ta * 1.25f * dayVis, lineW(0.3)))
+            if (dayVis > 0f) timeTicksFrom(86400, 0, tickPaint(line, ta * 2.0f * dayVis, lineW(0.42, 1.0)))
         }
-        if (hourVis > 0f) timeTicksFrom(3600, 86400, tickPaint(line, ta * 1.5f * hourVis, lineW(0.175)))
-        if (minVis > 0f) timeTicksFrom(60, 3600, tickPaint(line, ta * 1.4f * minVis, lineW(0.12)))
-        if (secVis > 0f) timeTicksFrom(1, 60, tickPaint(line, ta * 1.3f * secVis, lineW(0.08)))
+        // Иерархия: неделя > день > час > минута > секунда (и по яркости, и по толщине).
+        if (hourVis > 0f) timeTicksFrom(3600, 86400, tickPaint(line, ta * 1.0f * hourVis, lineW(0.175)))
+        if (minVis > 0f) timeTicksFrom(60, 3600, tickPaint(line, ta * 0.85f * minVis, lineW(0.12)))
+        if (secVis > 0f) timeTicksFrom(1, 60, tickPaint(line, ta * 0.75f * secVis, lineW(0.08)))
     }
 
 }
@@ -924,10 +878,22 @@ fun timeLabelFonts(outerR: Double, totalSec: Double) = DoubleArray(4) { i ->
  * секунды. Отступ от крупного ряда — 15% высоты его цифр + высота мелкой
  * цифры: ряды не касаются ни на каком зуме.
  */
+/**
+ * Внешний край ленточек событий: сразу за лесенкой подписей (её последний
+ * ряд) + зазор 0.35 высоты цифры дня. Раньше был фиксированный отступ
+ * 6.5u — между числами и событиями зияла пустота.
+ */
+fun eventBaseR(outerR: Double, totalSec: Double, h: Double): Double {
+    val f = timeLabelFonts(outerR, totalSec)
+    val rows = timeLabelRows(outerR, totalSec, h)
+    return rows[3] - h * f[3] / 2 - 0.35 * h * f[0]
+}
+
 fun timeLabelRows(outerR: Double, totalSec: Double, h: Double = DIGIT_H): DoubleArray {
     val f = timeLabelFonts(outerR, totalSec)
     val rows = DoubleArray(4)
-    var edge = 0.35 * h * f[0]
+    // От обода до числа дня — 0.6 высоты цифры (было 0.35: цифры липли к ободу).
+    var edge = 0.6 * h * f[0]
     for (i in 0..3) {
         if (i > 0) edge += 0.15 * h * f[i - 1] + 1.0 * h * f[i]
         rows[i] = outerR - edge - h * f[i] / 2
@@ -958,13 +924,16 @@ private fun buildBandPath(
     a1: Double,
     scale: Double,
     clip: (Double, Double) -> DoubleArray?,
+    roundK: Double = 0.7,
 ): Boolean {
     val c = clip(a0, a1) ?: return false
     val ro = r + halfW
     val ri = r - halfW
     val sweep = a1 - a0
     val sgn = if (sweep >= 0) 1.0 else -1.0
-    val cr = min(halfW * 0.7, abs(sweep) * r / 2)
+    // Радиус скругления: доля полуширины, но не больше половины длины —
+    // короткое событие становится узким скруглённым столбиком, а не кругом.
+    val cr = min(halfW * roundK, abs(sweep) * r / 2)
     val ca = (cr / r) * sgn
     val startCut = c[0] != a0
     val endCut = c[1] != a1
@@ -972,20 +941,34 @@ private fun buildBandPath(
     fun x(a: Double, rad: Double): Float = (cx + cos(a) * rad).toFloat()
     fun y(a: Double, rad: Double): Float = (cy + sin(a) * rad).toFloat()
 
+    // Угол — кубика с k = 0.5523 (четверть окружности), не квадратика:
+    // концы пилюли круглые, а не «гранёные».
+    fun corner(sa: Double, sr: Double, ca_: Double, cr_: Double, ea: Double, er: Double) {
+        val k = 0.5523
+        val sx = x(sa, sr); val sy = y(sa, sr)
+        val qx = x(ca_, cr_); val qy = y(ca_, cr_)
+        val ex = x(ea, er); val ey = y(ea, er)
+        path.cubicTo(
+            (sx + (qx - sx) * k).toFloat(), (sy + (qy - sy) * k).toFloat(),
+            (ex + (qx - ex) * k).toFloat(), (ey + (qy - ey) * k).toFloat(),
+            ex, ey,
+        )
+    }
+
     path.reset()
     arcPoly(path, cx, cy, ro, if (startCut) c[0] else a0 + ca, if (endCut) c[1] else a1 - ca, scale, true)
     if (!endCut) {
-        path.quadTo(x(a1, ro), y(a1, ro), x(a1, ro - cr), y(a1, ro - cr))
+        corner(a1 - ca, ro, a1, ro, a1, ro - cr)
         path.lineTo(x(a1, ri + cr), y(a1, ri + cr))
-        path.quadTo(x(a1, ri), y(a1, ri), x(a1 - ca, ri), y(a1 - ca, ri))
+        corner(a1, ri + cr, a1, ri, a1 - ca, ri)
     } else {
         path.lineTo(x(c[1], ri), y(c[1], ri))
     }
     arcPoly(path, cx, cy, ri, if (endCut) c[1] else a1 - ca, if (startCut) c[0] else a0 + ca, scale, false)
     if (!startCut) {
-        path.quadTo(x(a0, ri), y(a0, ri), x(a0, ri + cr), y(a0, ri + cr))
+        corner(a0 + ca, ri, a0, ri, a0, ri + cr)
         path.lineTo(x(a0, ro - cr), y(a0, ro - cr))
-        path.quadTo(x(a0, ro), y(a0, ro), x(a0 + ca, ro), y(a0 + ca, ro))
+        corner(a0, ro - cr, a0, ro, a0 + ca, ro)
     }
     path.close()
     return true

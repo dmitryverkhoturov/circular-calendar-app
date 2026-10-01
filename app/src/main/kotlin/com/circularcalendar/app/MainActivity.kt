@@ -167,6 +167,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Fonts.ctx = applicationContext
         loadSettings()
 
         // Edge-to-edge: рисуем под полностью прозрачными системными барами.

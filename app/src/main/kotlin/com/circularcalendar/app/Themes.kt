@@ -93,7 +93,27 @@ val BACKDROPS = listOf(
 
 // ── Шрифты (системные: ноль байт к APK) ─────────────────────────────────────
 
-class FontChoice(val name: String, val family: String, val style: Int, val caps: Boolean, val spacing: Float)
+class FontChoice(
+    val name: String, val family: String, val style: Int, val caps: Boolean, val spacing: Float,
+    val res: Int = 0, // встроенный TTF (res/font, урезан до латиницы+кириллицы, один вес)
+)
+
+/** Встроенные шрифты грузятся один раз из ресурсов (нужен Context — см. MainActivity). */
+object Fonts {
+    private val cache = HashMap<Int, Typeface>()
+    var ctx: android.content.Context? = null
+
+    fun of(f: FontChoice): Typeface {
+        if (f.res != 0) {
+            cache[f.res]?.let { return it }
+            val c = ctx
+            if (c != null) {
+                try { return c.resources.getFont(f.res).also { cache[f.res] = it } } catch (_: Exception) {}
+            }
+        }
+        return Typeface.create(f.family, f.style)
+    }
+}
 
 val FONTS = listOf(
     FontChoice("Обычный", "sans-serif-medium", Typeface.NORMAL, false, 0f),
@@ -103,6 +123,12 @@ val FONTS = listOf(
     FontChoice("С засечками", "serif", Typeface.BOLD, false, 0f),
     FontChoice("Моно", "monospace", Typeface.BOLD, false, 0f),
     FontChoice("От руки", "casual", Typeface.NORMAL, false, 0f),
+    // Встроенные (≈50 КБ каждый): мягкие, с кириллицей.
+    FontChoice("Nunito", "sans-serif-medium", Typeface.NORMAL, false, 0.01f, R.font.nunito),
+    FontChoice("Comfortaa", "sans-serif-medium", Typeface.NORMAL, false, 0f, R.font.comfortaa),
+    FontChoice("Rubik", "sans-serif-medium", Typeface.NORMAL, false, 0f, R.font.rubik),
+    FontChoice("Unbounded", "sans-serif-black", Typeface.NORMAL, false, 0f, R.font.unbounded),
+    FontChoice("Comfortaa капсом", "sans-serif-light", Typeface.NORMAL, true, 0.18f, R.font.comfortaa),
 )
 
 val PALETTE_NAMES = listOf("Календаря", "Мягкие", "Оттенки", "Монохром")
@@ -181,11 +207,11 @@ data class Design(
 val PRESETS: List<Pair<String, Design>> = listOf(
     "Сумерки" to Design(),
     "Мульт" to Design(
-        preset = "cartoon", glow = 0.55f, grain = 0.22f, volume = 0.6f, stars = true, font = 1,
+        preset = "cartoon", glow = 0.55f, grain = 0.22f, volume = 0.6f, stars = true, font = 7,
     ),
     "Бумага" to Design(
-        preset = "paper", ring = false, hole = 0f, grad = 1f, holeLine = false, tint = 0.18f,
-        backdrop = 4, glow = 0.1f, grain = 0.3f, volume = 0f, rays = true, font = 3, palette = 2, arrow = 1,
+        preset = "paper", hole = 0.22f, grad = 0f, holeLine = false, tint = 0.10f,
+        backdrop = 4, glow = 0f, grain = 0.25f, volume = 0f, rays = true, font = 11, palette = 2, arrow = 1,
     ),
     "Слива" to Design(
         preset = "plum", accent = 0xFFB8295F.toInt(), hole = 0.42f, grad = 0f, tint = 0.9f,
@@ -193,11 +219,11 @@ val PRESETS: List<Pair<String, Design>> = listOf(
     ),
     "Тушь" to Design(
         preset = "mono", accent = WHITE, hole = 0.3f, grad = 0.15f, tint = 0.07f, backdrop = 3,
-        glow = 0f, grain = 0.12f, volume = 0f, font = 1, palette = 3, arrow = 2, outline = 1f,
+        glow = 0f, grain = 0.12f, volume = 0f, font = 10, palette = 3, arrow = 2, outline = 1f,
     ),
     "Мел" to Design(
         preset = "monoLight", accent = 0xFF141414.toInt(), hole = 0.3f, grad = 0.15f, tint = 0.05f,
-        backdrop = 5, glow = 0f, grain = 0.12f, volume = 0f, font = 1, palette = 3, arrow = 1, outline = 1f,
+        backdrop = 5, glow = 0f, grain = 0.12f, volume = 0f, font = 10, palette = 3, arrow = 1, outline = 1f,
     ),
     "Классика" to Design(
         preset = "classic", accent = 0xFFD4A853.toInt(), ring = false, hole = 0f, grad = 1f, holeLine = false,
@@ -234,10 +260,11 @@ class Look(val d: Design) {
     }
 
     val font = FONTS[d.font.coerceIn(0, FONTS.size - 1)]
-    val typeface: Typeface = Typeface.create(font.family, font.style)
+    val typeface: Typeface = Fonts.of(font)
 
     // Риски (альфы — порт старой иерархии сезон > месяц > неделя > день > час).
-    val tickAlpha = if (dark) 0.08f else 0.10f
+    // Границы дней должны читаться и на светлой фуксии (было 0.08 — «пропали»).
+    val tickAlpha = if (dark) 0.15f else 0.17f
     val monthAlpha = if (d.rays) 0f else if (dark) 0.24f else 0.30f
     val seasonAlpha = if (dark) 0.70f else 0.55f
     val astroColor = if (dark) 0xFF64C8C0.toInt() else 0xFF2A8F88.toInt()
