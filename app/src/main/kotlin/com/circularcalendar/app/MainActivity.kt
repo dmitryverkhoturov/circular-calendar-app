@@ -32,6 +32,7 @@ class MainActivity : Activity() {
 
     private var settings = WheelSettings()
     private var events: List<CalendarEvent> = emptyList()
+    private var stress = false // отладка: тяжёлый календарь вместо реального
     private var calendars: List<CalendarInfo>? = null
     private var now: LocalDateTime = LocalDateTime.now()
 
@@ -235,6 +236,7 @@ class MainActivity : Activity() {
         // Мок всегда — виден сразу; реальные календари загрузятся асинхронно.
         events = buildMockEvents(now.year)
         restoreCamera()
+        wheel.perfHud = getSharedPreferences("settings", MODE_PRIVATE).getBoolean("perfHud", false)
         wheel.update(settings, events, now)
         mainHandler.postDelayed(nowTicker, 1000)
 
@@ -253,6 +255,14 @@ class MainActivity : Activity() {
             wheel.postDelayed({ android.util.Log.i("CCDBG", wheel.debugState()) }, 2500)
         }
         if (intent.hasExtra("state")) android.util.Log.i("CCDBG", wheel.debugState())
+        if (intent.hasExtra("dbg")) { wheel.dbg = intent.getIntExtra("dbg", 0); RDBG = wheel.dbg; wheel.update(settings, events, now) }
+        if (intent.hasExtra("hud")) wheel.perfHud = intent.getBooleanExtra("hud", false)
+        if (intent.getBooleanExtra("stress", false)) {
+            stress = true
+            events = buildStressEvents(now.year)
+            android.util.Log.i("CCDBG", "stress events: ${events.size}")
+            wheel.update(settings, events, now)
+        }
         if (intent.hasExtra("zoom")) {
             wheel.post {
                 wheel.debugLook(
@@ -278,6 +288,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         mainHandler.removeCallbacksAndMessages(null)
+        wheel.release()
         super.onDestroy()
     }
 
@@ -301,7 +312,7 @@ class MainActivity : Activity() {
         Thread {
             val (d, evs) = CalendarRepo.loadAll(this, now.year)
             mainHandler.post {
-                if (d.ok) {
+                if (d.ok && !stress) {
                     calendars = d.calendars
                     events = evs
                     now = LocalDateTime.now()
@@ -673,6 +684,14 @@ class MainActivity : Activity() {
         col.addView(toggle(listOf("Скрыты", "Показаны"),
             if (settings.showOrbits) 1 else 0) { i ->
             applySettings(settings.copy(showOrbits = i == 1))
+        })
+        space(14f)
+
+        col.addView(label("Счётчик кадров"))
+        space(6f)
+        col.addView(toggle(listOf("Скрыт", "Показан"), if (wheel.perfHud) 1 else 0) { i ->
+            wheel.perfHud = i == 1
+            getSharedPreferences("settings", MODE_PRIVATE).edit().putBoolean("perfHud", i == 1).apply()
         })
         space(14f)
 

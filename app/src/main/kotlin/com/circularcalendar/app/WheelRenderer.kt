@@ -108,8 +108,12 @@ fun drawWheel(
     height: Float,
     tm: TimeMap,
     settings: WheelSettings,
-    bands: List<EventBand>,
+    events: EventIndex,
     lod: Lod,
+    // Слои LOD (риски и подписи времени) — в отдельные холсты на полной
+    // яркости; их прозрачность ставится КАЖДЫЙ кадр по текущему зуму (плавное
+    // проявление без перезаписи). null — рисовать всё в [canvas] с текущей яркостью.
+    tiers: Array<Canvas>? = null,
 ) {
     val lk = settings.look
     val ds = lk.d
@@ -173,7 +177,8 @@ fun drawWheel(
     // масштабирован обратно), как подписи. В локальных единицах на зуме 10⁵
     // ширина линии ~1e-5 — мобильные GPU считают с пониженной точностью,
     // и деления «плыли» и пропадали (на эмуляторе точности хватало).
-    fun radial(a: Double, r0: Double, r1: Double, p: Paint) {
+    fun radial(a: Double, r0: Double, r1: Double, p: Paint, cv: Canvas = canvas) {
+        val canvas = cv
         val ra = max(r0, lod.rMin - 2.0 / s)
         val rb = min(r1, lod.rMax + 2.0 / s)
         if (ra >= rb || !angleVisible(a)) return
@@ -232,8 +237,9 @@ fun drawWheel(
     /** Подпись (прямая) по касательной с ЭКРАННЫМ кеглем [sizePx]. */
     fun label(
         text: String, a: Double, r: Double, sizePx: Float, color: Int,
-        digits: Boolean = false,
+        digits: Boolean = false, cv: Canvas = canvas,
     ) {
+        val canvas = cv
         if (sizePx < 2.5f) return
         val reach = sizePx * 3 / s
         if (r < lod.rMin - reach || r > lod.rMax + reach) return
@@ -293,7 +299,7 @@ fun drawWheel(
     // ═════ Слой круга: заливка + радиальные риски, с маской дырки/градиента ═══
     val gradOn = ds.ring || ds.grad < 0.999f
     val maskEnd = holeR + (outerR - holeR) * 0.92
-    val needMask = gradOn && lod.rMin < maskEnd
+    val needMask = RDBG and 16 == 0 && gradOn && lod.rMin < maskEnd
     if (needMask) {
         val b = (outerR + 4 * unit).toFloat()
         canvas.saveLayer(lx.toFloat() - b, ly.toFloat() - b, lx.toFloat() + b, ly.toFloat() + b, null)
@@ -325,13 +331,18 @@ fun drawWheel(
     drawSlice(0.0, nowFrac, lk.sectorPast)
     drawSlice(nowFrac, 1.0, lk.sectorFuture)
 
-    // ── LOD-лестница рисок: недели → дни → часы → минуты → секунды ─────────
-    // Порог появления — экранное расстояние между соседними рисками вида.
-    val weekVis = fade(pxPerDay * 7, 30.0, 60.0)
-    val dayVis = fade(pxPerDay, 25.0, 50.0)
-    val hourVis = fade(pxPerSec * 3600, 12.0, 25.0)
-    val minVis = fade(pxPerSec * 60, 10.0, 22.0)
-    val secVis = fade(pxPerSec, 10.0, 22.0)
+    // ── LOD-лестница рисок и подписей (см. [tierVis]) ──────────────────────
+    // В режиме слоёв: слой пишется на полной яркости, если проявится в
+    // пределах ×TIER_REACH зума (до следующей перезаписи), иначе пропускается.
+    // Слой, который во всём диапазоне уже проявлен полностью, вкатывается в
+    // основную сцену (кэш-растр, ноль работы на кадр); отдельно, с яркостью
+    // на каждый кадр, живут только проявляющиеся/гаснущие.
+    fun fading(i: Int): Boolean =
+        tiers != null && tierVis(i, s / TIER_REACH, outerR, totalSec) < 1f
+    fun tv(i: Int): Float =
+        if (tiers != null) (if (tierVis(i, s * TIER_REACH, outerR, totalSec) > 0f) 1f else 0f)
+        else tierVis(i, s, outerR, totalSec)
+    fun tc(i: Int): Canvas = if (fading(i)) tiers!![i] else canvas
 
     fun tickPaint(color: Int, alpha: Float, w: Float) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         this.color = withAlpha(color, alpha)
@@ -445,8 +456,9 @@ fun drawWheel(
         val rows = timeLabelRows(outerR, totalSec, digitH)
         for (i in 0..3) {
             val f = fonts[i]
-            val vis = if (i == 0) dayVis else fade(f * s, 6.0, 10.0)
+            val vis = tv(TIER_LABEL0 + i)
             if (vis <= 0f) continue
+            val cv = tc(TIER_LABEL0 + i)
             val rc = rows[i]
             if (rc + f < lod.rMin || rc - f > lod.rMax) continue
             val step = steps[i]
@@ -461,7 +473,7 @@ fun drawWheel(
                 else "%02d".format(Math.floorMod(k, if (i == 1) 24L else 60L))
                 val fmid = (f0 + f1) / 2
                 val c = if (fmid <= nowFrac) lk.dayNumPast else lk.dayNumFuture
-                label(text, tm.angleOf(fmid), rc, (f * s).toFloat(), mulAlpha(c, vis), digits = true)
+                label(text, tm.angleOf(fmid), rc, (f * s).toFloat(), mulAlpha(c, vis), digits = true, cv = cv)
             }
         }
     }
@@ -528,7 +540,7 @@ fun drawWheel(
     val laneGap = 0.6 * unit
     val eventBandBaseR = eventBaseR(outerR, totalSec, digitH)
 
-    if (bands.isNotEmpty()) {
+    if (events.all.isNotEmpty()) {
         val minBandR = max(g.innerR, holeR) + bandW / 2 + bandGap
         val availableSpace = eventBandBaseR - bandW / 2 - minBandR
         val maxVisibleLayers =
@@ -544,26 +556,31 @@ fun drawWheel(
 
         val overflowBuckets = HashMap<Int, Int>()
         val overflowFrac = HashMap<Int, Double>()
+        // Крошечные на экране события (короче ~3px) — не squircle-путь каждое,
+        // а четырёхугольник в общий путь своего цвета: один drawPath на цвет.
+        val tiny = HashMap<Int, Path>()
+        val tinyPx = 3.0
+        var glows = 0
 
-        for (b in bands) {
-            if (!visible(b.startFrac, b.endFrac)) continue
+        if (RDBG and 128 == 0) events.forVisible(lod.full, fLo, fHi) { b ->
+            if (!visible(b.startFrac, b.endFrac)) return@forVisible
 
             if (b.layer >= maxVisibleLayers) {
                 val key = (b.startFrac * 50).toInt()
                 overflowBuckets[key] = (overflowBuckets[key] ?: 0) + 1
                 overflowFrac.putIfAbsent(key, b.startFrac)
-                continue
+                return@forVisible
             }
 
             val sweepFrac = b.endFrac - b.startFrac
-            if (sweepFrac * pxPerFrac < 0.5) continue
+            if (sweepFrac * pxPerFrac < 0.5) return@forVisible
 
             val rRow = (eventBandBaseR - b.layer * (bandW + bandGap) - bandW / 2)
                 .coerceIn(minBandR, eventBandBaseR)
             // Дорожка внутри ряда (короткие пересекающиеся делят ряд по радиусу).
             val laneW = (bandW - (b.lanes - 1) * laneGap) / b.lanes
             val r = rRow + bandW / 2 - laneW / 2 - b.lane * (laneW + laneGap)
-            if (r + laneW / 2 < lod.rMin || r - laneW / 2 > lod.rMax) continue
+            if (r + laneW / 2 < lod.rMin || r - laneW / 2 > lod.rMax) return@forVisible
 
             val a0 = tm.angleOf(b.startFrac)
             val a1 = tm.angleOf(b.endFrac)
@@ -573,16 +590,36 @@ fun drawWheel(
             val col = lk.eventColor(b.event.color, b.event.calendarId)
             var textBg = col
 
+            val lenPx = abs(a1 - a0) * r * s
+            if (lenPx < tinyPx || laneW * s < tinyPx) {
+                val key = withAlpha(col, alpha)
+                val path = tiny.getOrPut(key) { Path() }
+                val am = (a0 + a1) / 2
+                val ha = max(abs(a1 - a0), 0.8 / (r * s)) / 2
+                val hw = max(laneW / 2, 0.4 / s)
+                path.moveTo(px(am - ha, r - hw), py(am - ha, r - hw))
+                path.lineTo(px(am - ha, r + hw), py(am - ha, r + hw))
+                path.lineTo(px(am + ha, r + hw), py(am + ha, r + hw))
+                path.lineTo(px(am + ha, r - hw), py(am + ha, r - hw))
+                path.close()
+                return@forVisible
+            }
+
             // Форма: изогнутый squircle точной длины. «Пилюли» — скругление на
             // всю полуширину; короткое событие сужается с боков (не круг).
             val halfW = laneW / 2
             val roundK = if (ds.roundEvents) 1.0 else 0.7
-            if (!buildBandPath(bandPath, lx, ly, r, halfW, a0, a1, s, ::clip, roundK)) continue
+            if (!buildBandPath(bandPath, lx, ly, r, halfW, a0, a1, s, ::clip, roundK)) return@forVisible
             val ow = if (ds.outline > 0f) max(laneW * 0.16 * ds.outline, 1.1 / s) else 0.0
             val fillCol = if (ds.outline > 0f) mix(lk.bd.bg1, col, 0.10f) else col
             textBg = fillCol
             bandPaint.color = withAlpha(fillCol, alpha)
-            if (glowLocal > 0f && !isPast) bandPaint.setShadowLayer(glowLocal * 0.7f, 0f, 0f, withAlpha(col, 0.85f))
+            // Свечение (размытие) — дорогая растеризация слоя: только у заметных
+            // на экране лент и не больше GLOW_MAX на сцену; у мелких его не видно.
+            if (RDBG and 32 == 0 && glowLocal > 0f && !isPast && lenPx >= 12 && glows < GLOW_MAX) {
+                bandPaint.setShadowLayer(glowLocal * 0.7f, 0f, 0f, withAlpha(col, 0.85f))
+                glows++
+            }
             canvas.drawPath(bandPath, bandPaint)
             bandPaint.clearShadowLayer()
             if (ow > 0) {
@@ -604,14 +641,18 @@ fun drawWheel(
                 }
             }
 
-            drawBandTitle(
-                canvas, textPaint, b.event.title, lx, ly, r, laneW, a0, a1,
+            if (RDBG and 64 == 0) drawBandTitle(
+                canvas, textPaint, b, lx, ly, r, laneW, a0, a1,
                 textBg, alpha, face,
                 bottom = onBottom((a0 + a1) / 2),
                 isDayPlus = sweepFrac >= LARGE_BAND_FRAC,
                 ccw = settings.counterClockwise,
                 camScale = s,
             )
+        }
+        if (tiny.isNotEmpty()) {
+            val tp = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+            for ((c, path) in tiny) { tp.color = c; canvas.drawPath(path, tp) }
         }
 
         if (overflowBuckets.isNotEmpty()) {
@@ -640,33 +681,36 @@ fun drawWheel(
     // много — деления «пропадали»). В кольце начинаются от дырки.
     run {
         val r0 = if (ds.ring) holeR else 0.0
-        fun timeTicksFrom(step: Long, skip: Long, p: Paint) {
+        fun timeTicksFrom(step: Long, skip: Long, p: Paint, cv: Canvas) {
             val k0 = ceil(fLo * totalSec / step).toLong()
             val k1 = floor(fHi * totalSec / step).toLong()
             if (k1 - k0 > 6000) return
             for (k in k0..k1) {
                 val sec = k * step
                 if (skip > 0 && Math.floorMod(sec, skip) == 0L) continue
-                radial(tm.angleOf(sec / totalSec), r0, outerR, p)
+                radial(tm.angleOf(sec / totalSec), r0, outerR, p, cv)
             }
         }
+        val weekVis = tv(TIER_WEEK); val dayVis = tv(TIER_DAY)
+        val hourVis = tv(TIER_HOUR); val minVis = tv(TIER_MIN); val secVis = tv(TIER_SEC)
         if (!ds.rays) {
             if (weekVis > 0f) {
                 val p = tickPaint(line, ta * 2.6f * weekVis, lineW(0.55, 1.0))
+                val cv = tc(TIER_WEEK)
                 val k0 = ceil(fLo * totalSec / 86400).toLong()
                 val k1 = floor(fHi * totalSec / 86400).toLong()
                 val dow0 = tm.yearStart.dayOfWeek.value - 1 // 0 = понедельник
                 for (k in k0..k1) {
                     if (Math.floorMod(dow0 + k, 7L) != 0L) continue
-                    radial(tm.angleOf(k * 86400.0 / totalSec), r0, outerR, p)
+                    radial(tm.angleOf(k * 86400.0 / totalSec), r0, outerR, p, cv)
                 }
             }
-            if (dayVis > 0f) timeTicksFrom(86400, 0, tickPaint(line, ta * 2.0f * dayVis, lineW(0.42, 1.0)))
+            if (dayVis > 0f) timeTicksFrom(86400, 0, tickPaint(line, ta * 2.0f * dayVis, lineW(0.42, 1.0)), tc(TIER_DAY))
         }
         // Иерархия: неделя > день > час > минута > секунда (и по яркости, и по толщине).
-        if (hourVis > 0f) timeTicksFrom(3600, 86400, tickPaint(line, ta * 1.0f * hourVis, lineW(0.175)))
-        if (minVis > 0f) timeTicksFrom(60, 3600, tickPaint(line, ta * 0.85f * minVis, lineW(0.12)))
-        if (secVis > 0f) timeTicksFrom(1, 60, tickPaint(line, ta * 0.75f * secVis, lineW(0.08)))
+        if (hourVis > 0f) timeTicksFrom(3600, 86400, tickPaint(line, ta * 1.0f * hourVis, lineW(0.175)), tc(TIER_HOUR))
+        if (minVis > 0f) timeTicksFrom(60, 3600, tickPaint(line, ta * 0.85f * minVis, lineW(0.12)), tc(TIER_MIN))
+        if (secVis > 0f) timeTicksFrom(1, 60, tickPaint(line, ta * 0.75f * secVis, lineW(0.08)), tc(TIER_SEC))
     }
 
 }
@@ -851,13 +895,42 @@ fun drawBodies(
     }
 }
 
+// ── Слои LOD: риски недели/дня/часа/минуты/секунды и подписи дня/часа/мин/сек ─
+const val TIER_WEEK = 0
+const val TIER_DAY = 1
+const val TIER_HOUR = 2
+const val TIER_MIN = 3
+const val TIER_SEC = 4
+const val TIER_LABEL0 = 5 // 5..8 — подписи дня, часа, минуты, секунды
+const val TIER_N = 9
+/** Запас зума, на который слои пишутся заранее (перезапись — раньше, при ×1.12). */
+const val TIER_REACH = 1.35
+
+private fun fadeF(v: Double, lo: Double, hi: Double): Float = ((v - lo) / (hi - lo)).coerceIn(0.0, 1.0).toFloat()
+
+/**
+ * Яркость слоя LOD на зуме [s]. Порог появления рисок — экранное расстояние
+ * между соседними рисками вида; подписей — их экранный кегль.
+ */
+fun tierVis(i: Int, s: Double, outerR: Double, totalSec: Double): Float {
+    val pxPerSec = 2.0 * PI * outerR * s / totalSec
+    return when (i) {
+        TIER_WEEK -> fadeF(pxPerSec * 86400 * 7, 30.0, 60.0)
+        TIER_DAY, TIER_LABEL0 -> fadeF(pxPerSec * 86400, 25.0, 50.0)
+        TIER_HOUR -> fadeF(pxPerSec * 3600, 12.0, 25.0)
+        TIER_MIN -> fadeF(pxPerSec * 60, 10.0, 22.0)
+        TIER_SEC -> fadeF(pxPerSec, 10.0, 22.0)
+        else -> fadeF(timeLabelFonts(outerR, totalSec)[i - TIER_LABEL0] * s, 6.0, 10.0)
+    }
+}
+
 // ── Лесенка подписей времени (общая для рендера и отладки) ─────────────────
 val TIME_STEPS = longArrayOf(86400, 3600, 60, 1)
 
 /** Высота цифр шрифта (доля кегля) — по реальным границам глифов. */
 val DIGIT_H: Double by lazy { digitHeight(Typeface.DEFAULT) }
 
-private val digitHCache = HashMap<Typeface, Double>()
+private val digitHCache = java.util.concurrent.ConcurrentHashMap<Typeface, Double>()
 
 fun digitHeight(tf: Typeface): Double = digitHCache.getOrPut(tf) {
     val p = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -984,7 +1057,7 @@ private fun buildBandPath(
 private fun drawBandTitle(
     canvas: Canvas,
     paint: Paint,
-    title: String,
+    band: EventBand,
     cx: Double,
     cy: Double,
     r: Double,
@@ -999,8 +1072,27 @@ private fun drawBandTitle(
     ccw: Boolean,
     camScale: Double,
 ) {
+    val title = band.event.title
     if (title.isBlank()) return
-    val text = if (title.length > 200) title.take(200).trimEnd() + "…" else title
+    val arcLen = abs(a1 - a0) * r
+    // Кегль не больше стартового — если даже он мельче порога, раскладку не считаем.
+    val maxFs = if (isDayPlus) bandW * 0.52 else min(bandW * 0.30, arcLen / 1.25)
+    if (maxFs * camScale < TEXT_MIN_SCREEN_FS) return
+
+    // Раскладка (кегль + строки) не зависит от зума — считается один раз на
+    // событие и геометрию, а не на каждую перезапись сцены.
+    var tl = band.title
+    if (tl == null || tl.bandW != bandW || tl.arcLen != arcLen || tl.face !== face || tl.dayPlus != isDayPlus) {
+        val text = if (title.length > 200) title.take(200).trimEnd() + "…" else title
+        paint.typeface = face
+        paint.letterSpacing = 0f
+        tl = if (isDayPlus) layoutArcTitle(paint, text, arcLen, bandW, face)
+        else layoutRadialTitle(paint, text, arcLen, bandW, face)
+        band.title = tl
+    }
+    val ls = tl.lines ?: return
+    val fs = tl.fs
+    if (fs * camScale < TEXT_MIN_SCREEN_FS || fs * camScale > TEXT_MAX_SCREEN_FS) return
 
     val lum = 0.299f * ((bandColor shr 16) and 0xFF) +
         0.587f * ((bandColor shr 8) and 0xFF) +
@@ -1008,121 +1100,82 @@ private fun drawBandTitle(
     paint.color = if (lum * bandAlpha > 150f) 0xD9140A1E.toInt() else 0xF0FFFFFF.toInt()
     paint.typeface = face
     paint.letterSpacing = 0f
+    paint.textSize = fs
 
     if (isDayPlus) {
-        drawArcTitle(canvas, paint, text, cx, cy, r, bandW, a0, a1, bottom, camScale)
+        // Путь по дуге: внизу экрана — по убыванию угла (текст читается прямо),
+        // вверху — по возрастанию (переворачивается, чтобы тоже читался).
+        paint.textAlign = Paint.Align.LEFT
+        val lo = min(a0, a1); val hi = max(a0, a1)
+        val path = Path()
+        if (bottom) arcPoly(path, cx, cy, r, hi, lo, camScale, true)
+        else arcPoly(path, cx, cy, r, lo, hi, camScale, true)
+        val base = -(paint.ascent() + paint.descent()) / 2f
+        val n = ls.size
+        for (i in 0 until n) {
+            val v = (i - (n - 1) / 2f) * fs * 1.15f + base
+            canvas.drawTextOnPath(ls[i], path, (arcLen.toFloat() - tl.widths[i]) / 2f, v, paint)
+        }
     } else {
-        drawRadialTitle(canvas, paint, text, cx, cy, r, bandW, a0, a1, ccw, camScale)
+        paint.textAlign = Paint.Align.CENTER
+        val amid = (a0 + a1) / 2
+        val dirSign = if (ccw) 1.0 else -1.0
+        val dx = -sin(amid) * dirSign
+        val dy = cos(amid) * dirSign
+        val rotDeg = (atan2(-dx, dy) * 180.0 / PI).toFloat()
+        canvas.save()
+        canvas.translate((cx + cos(amid) * r).toFloat(), (cy + sin(amid) * r).toFloat())
+        canvas.rotate(rotDeg)
+        val base = -(paint.ascent() + paint.descent()) / 2f
+        val n = ls.size
+        for (i in 0 until n) {
+            val y = (i - (n - 1) / 2f) * fs * 1.25f + base
+            canvas.drawText(ls[i], 0f, y, paint)
+        }
+        canvas.restore()
     }
     paint.textAlign = Paint.Align.CENTER
 }
 
 private const val TEXT_MIN_SCREEN_FS = 5.0
+private const val GLOW_MAX = 48
 private const val TEXT_MAX_SCREEN_FS = 1500.0
 
-private fun drawArcTitle(
-    canvas: Canvas,
-    paint: Paint,
-    text: String,
-    cx: Double,
-    cy: Double,
-    r: Double,
-    bandW: Double,
-    a0: Double,
-    a1: Double,
-    bottom: Boolean,
-    camScale: Double,
-) {
-    val sweepAbs = abs(a1 - a0)
-    val arcLen = (sweepAbs * r).toFloat()
-    val avail = arcLen * 0.90f
-    if (avail <= 0f) return
+/** Раскладка названия события (кэшируется в [EventBand.title]). */
+class TitleLayout(
+    val bandW: Double, val arcLen: Double, val face: Typeface, val dayPlus: Boolean,
+    val fs: Float, val lines: List<String>?, val widths: FloatArray,
+)
 
-    paint.textAlign = Paint.Align.LEFT
-
+private fun layoutArcTitle(paint: Paint, text: String, arcLen: Double, bandW: Double, face: Typeface): TitleLayout {
+    val avail = (arcLen * 0.90).toFloat()
     var fs = (bandW * 0.52).toFloat()
     var lines: List<String>? = null
-    while (fs >= bandW * 0.02) {
+    if (avail > 0f) while (fs >= bandW * 0.02) {
         paint.textSize = fs
         val maxLines = min(8, (bandW * 0.92 / (fs * 1.15)).toInt().coerceAtLeast(1))
         val wrapped = wrapText(text, paint, avail, maxLines)
-        if (wrapped != null) {
-            lines = wrapped; break
-        }
+        if (wrapped != null) { lines = wrapped; break }
         fs *= 0.84f
     }
-    val ls = lines ?: return
-    if (fs * camScale < TEXT_MIN_SCREEN_FS || fs * camScale > TEXT_MAX_SCREEN_FS) return
-
-    // Путь по дуге: внизу экрана — по убыванию угла (текст читается прямо),
-    // вверху — по возрастанию (переворачивается, чтобы тоже читался).
-    val lo = min(a0, a1); val hi = max(a0, a1)
-    val path = Path()
-    if (bottom) arcPoly(path, cx, cy, r, hi, lo, camScale, true)
-    else arcPoly(path, cx, cy, r, lo, hi, camScale, true)
-
     paint.textSize = fs
-    val base = -(paint.ascent() + paint.descent()) / 2f
-    val n = ls.size
-    ls.forEachIndexed { i, line ->
-        val lw = paint.measureText(line)
-        val v = (i - (n - 1) / 2f) * fs * 1.15f + base
-        canvas.drawTextOnPath(line, path, (arcLen - lw) / 2f, v, paint)
-    }
+    val widths = FloatArray(lines?.size ?: 0) { paint.measureText(lines!![it]) }
+    return TitleLayout(bandW, arcLen, face, true, fs, lines, widths)
 }
 
-private fun drawRadialTitle(
-    canvas: Canvas,
-    paint: Paint,
-    text: String,
-    cx: Double,
-    cy: Double,
-    r: Double,
-    bandW: Double,
-    a0: Double,
-    a1: Double,
-    ccw: Boolean,
-    camScale: Double,
-) {
-    val amid = (a0 + a1) / 2
-    val angW = (abs(a1 - a0) * r).toFloat()
+private fun layoutRadialTitle(paint: Paint, text: String, arcLen: Double, bandW: Double, face: Typeface): TitleLayout {
+    val angW = arcLen.toFloat()
     val maxLen = (bandW * 0.9).toFloat()
-
-    paint.textAlign = Paint.Align.CENTER
-
     var fs = min((bandW * 0.30).toFloat(), angW / 1.25f)
     var lines: List<String>? = null
     while (fs >= bandW * 0.01) {
         paint.textSize = fs
         val maxLines = min(8, (angW / (fs * 1.25f)).toInt().coerceAtLeast(1))
         val wrapped = wrapText(text, paint, maxLen, maxLines)
-        if (wrapped != null) {
-            lines = wrapped; break
-        }
+        if (wrapped != null) { lines = wrapped; break }
         fs *= 0.84f
     }
-    val ls = lines ?: return
-    if (fs * camScale < TEXT_MIN_SCREEN_FS || fs * camScale > TEXT_MAX_SCREEN_FS) return
-
-    paint.textSize = fs
-
-    val dirSign = if (ccw) 1.0 else -1.0
-    val dx = -sin(amid) * dirSign
-    val dy = cos(amid) * dirSign
-    val ux = dy
-    val uy = -dx
-    val rotDeg = (atan2(uy, ux) * 180.0 / PI).toFloat()
-
-    canvas.save()
-    canvas.translate((cx + cos(amid) * r).toFloat(), (cy + sin(amid) * r).toFloat())
-    canvas.rotate(rotDeg)
-    val base = -(paint.ascent() + paint.descent()) / 2f
-    val n = ls.size
-    ls.forEachIndexed { i, line ->
-        val y = (i - (n - 1) / 2f) * fs * 1.25f + base
-        canvas.drawText(line, 0f, y, paint)
-    }
-    canvas.restore()
+    return TitleLayout(bandW, arcLen, face, false, fs, lines, FloatArray(0))
 }
 
 private fun wrapText(text: String, paint: Paint, maxW: Float, maxLines: Int): List<String>? {
@@ -1145,3 +1198,50 @@ private fun wrapText(text: String, paint: Paint, maxW: Float, maxLines: Int): Li
     if (cur.isNotEmpty()) lines.add(cur.toString())
     return if (lines.size <= maxLines) lines else null
 }
+
+/**
+ * Индекс событий по времени: короткие отсортированы по началу — в видимое
+ * окно попадаем двоичным поиском, а не перебором тысяч экземпляров
+ * повторяющихся событий; длинные (их мало) проверяются все.
+ */
+class EventIndex(bands: List<EventBand>) {
+    val all = bands
+    private val short: Array<EventBand>
+    private val shortStart: DoubleArray
+    private val long: List<EventBand>
+
+    init {
+        val (sh, lg) = bands.partition { it.endFrac - it.startFrac <= SHORT_MAX }
+        short = sh.sortedBy { it.startFrac }.toTypedArray()
+        shortStart = DoubleArray(short.size) { short[it].startFrac }
+        long = lg
+    }
+
+    /** Все события, которые могут пересечь окно [fLo, fHi] (+ сдвиги на годы). */
+    inline fun forVisible(full: Boolean, fLo: Double, fHi: Double, f: (EventBand) -> Unit) {
+        if (full || fHi - fLo > 0.9) { for (b in all) f(b); return }
+        forLong(f)
+        for (k in -2..2) forShort(fLo + k - SHORT_MAX, fHi + k, f)
+    }
+
+    inline fun forLong(f: (EventBand) -> Unit) { for (b in longList()) f(b) }
+
+    inline fun forShort(from: Double, to: Double, f: (EventBand) -> Unit) {
+        val arr = shortArr()
+        var i = lowerBound(from)
+        while (i < arr.size && arr[i].startFrac < to) { f(arr[i]); i++ }
+    }
+
+    fun longList(): List<EventBand> = long
+    fun shortArr(): Array<EventBand> = short
+
+    fun lowerBound(x: Double): Int {
+        var lo = 0; var hi = shortStart.size
+        while (lo < hi) { val m = (lo + hi) ushr 1; if (shortStart[m] < x) lo = m + 1 else hi = m }
+        return lo
+    }
+
+    companion object { const val SHORT_MAX = 0.01 } // ~3.6 суток
+}
+
+@Volatile var RDBG = 0 // отладка рендера сцены (см. WheelView.dbg)

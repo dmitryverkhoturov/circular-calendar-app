@@ -130,7 +130,10 @@ class EventBand(
     // по радиусу на [lanes] дорожек, событие — в дорожке [lane] (0 = у кольца).
     var lane: Int = 0,
     var lanes: Int = 1,
-)
+) {
+    /** Кэш раскладки названия (пишет только поток записи сцены). */
+    var title: TitleLayout? = null
+}
 
 /** Граница «крупного» события: занимает на круге не меньше суток. */
 const val LARGE_BAND_FRAC = 1.0 / 366.0
@@ -316,4 +319,35 @@ private fun shortMock(vararg c: Int): List<CalendarEvent> {
         CalendarEvent("s6", "Звонок маме", at(2, 20, 0), at(2, 20, 15), c[1], "personal"),
         CalendarEvent("s7", "Йога", at(-1, 8, 0), at(-1, 9, 0), c[3], "health"),
     )
+}
+
+/**
+ * Отладка: тяжёлый календарь как на реальном телефоне — тысячи экземпляров
+ * повторяющихся событий за ±1 год (adb: --ez stress true).
+ */
+fun buildStressEvents(year: Int): List<CalendarEvent> {
+    val cols = intArrayOf(0xFF4A90D9.toInt(), 0xFF27AE60.toInt(), 0xFFE67E22.toInt(), 0xFF8E44AD.toInt(), 0xFF16A085.toInt(), 0xFFE74C3C.toInt())
+    val rnd = java.util.Random(5)
+    val out = ArrayList<CalendarEvent>()
+    var day = LocalDateTime.of(year - 1, 7, 1, 0, 0)
+    val end = LocalDateTime.of(year + 1, 7, 1, 0, 0)
+    var n = 0
+    val names = arrayOf("Стендап", "Созвон с командой", "Обед", "Тренировка", "Планирование спринта", "1:1 с руководителем", "Английский", "Дорога", "Ревью дизайна", "Йога")
+    while (day < end) {
+        val dow = day.dayOfWeek.value
+        if (dow <= 5) {
+            out.add(CalendarEvent("w${n++}", "Стендап", day.withHour(10), day.withHour(10).withMinute(15), cols[0], "work"))
+            out.add(CalendarEvent("w${n++}", "Обед", day.withHour(13), day.withHour(14), cols[1], "personal"))
+            repeat(rnd.nextInt(4)) {
+                val h = 11 + rnd.nextInt(7)
+                val len = 30L * (1 + rnd.nextInt(3))
+                out.add(CalendarEvent("w${n++}", names[rnd.nextInt(names.size)], day.withHour(h), day.withHour(h).plusMinutes(len), cols[rnd.nextInt(6)], "work"))
+            }
+        }
+        if (dow == 2 || dow == 4) out.add(CalendarEvent("w${n++}", "Тренировка", day.withHour(19), day.withHour(20).withMinute(30), cols[4], "health"))
+        if (rnd.nextInt(12) == 0) out.add(CalendarEvent("w${n++}", "День рождения", day, day.plusDays(1), cols[3], "personal", true))
+        if (rnd.nextInt(25) == 0) out.add(CalendarEvent("w${n++}", "Поездка", day, day.plusDays(2L + rnd.nextInt(6)), cols[5], "personal"))
+        day = day.plusDays(1)
+    }
+    return out + buildMockEvents(year)
 }
