@@ -107,13 +107,19 @@ class WheelView(context: Context) : View(context) {
     /** Поворот, с которым рисуется статичная сцена. */
     private fun thEff() = camTh + timeRot
 
+    private var frameNow: LocalDateTime = LocalDateTime.now()
+
     private fun refreshTime() {
         val n = LocalDateTime.now()
+        frameNow = n
         tmDyn = TimeMap(n, settings.counterClockwise, settings.nowAtBottom, settings.keplerOrbit, settings.arrowMoves)
-        timeRot = if (settings.arrowMoves) 0.0 else {
-            val f = java.time.Duration.between(tm.yearStart, n).toNanos() / 1e9 / tm.totalSec
-            tm.dir * tm.offsetOf(f)
-        }
+        timeRot = timeRotFor(tm)
+    }
+
+    /** Поворот сцены, записанной с [t], к живому «сейчас» (у плиток разных поколений свой). */
+    private fun timeRotFor(t: TimeMap): Double = if (settings.arrowMoves) 0.0 else {
+        val f = java.time.Duration.between(t.yearStart, frameNow).toNanos() / 1e9 / t.totalSec
+        t.dir * t.offsetOf(f)
     }
 
     private var sceneDirty = true
@@ -1090,7 +1096,8 @@ class WheelView(context: Context) : View(context) {
         val lines = arrayOf(
             "fps %.0f".format(fps),
             "рывков >33мс: $jank",
-            "кадров с размытым: $fbFrames, с дырой: $holeFrames",
+            "кадров с грубой подменой: $fbFrames",
+            "кадров с дырой: $holeFrames, оживлено: ${tiles.revivedTotal}",
             "худший кадр: %.0f мс".format(worst / 1e6),
             "onDraw: %.1f мс".format(drawCostNs / 1e6),
             "плитка (фон): %.0f мс".format(tiles.lastJobMs),
@@ -1137,10 +1144,11 @@ class WheelView(context: Context) : View(context) {
         val totalSec = tm.totalSec
         var more = false
         if (dbg and 2 == 0) more = tiles.draw(
-            canvas, camS, thEff(), camOx, camOy, width.toDouble(), height.toDouble(),
+            canvas, camS, camTh, camOx, camOy, width.toDouble(), height.toDouble(),
             cvX, cvY, cvTh, cvLs,
             { i -> if (dbg and 1 != 0) 0f else tierVis(i, camS, outerR, totalSec) },
             ::tileLod,
+            ::timeRotFor,
         )
         if (dbg and 4 == 0) drawBodiesInto(canvas)
         drawGrain(canvas)

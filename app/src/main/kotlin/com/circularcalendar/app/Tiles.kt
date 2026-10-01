@@ -36,10 +36,10 @@ import kotlin.math.sqrt
 const val TILE = 512
 /** Запас окна плитки, px: свечение и края соседних фигур заходят внутрь. */
 const val TILE_MARGIN = 48.0
-private const val NEW_PER_FRAME = 3
-private const val CACHE_MAX = 80 // ×1 МБ видеопамяти на плитку
+private const val NEW_PER_FRAME = 4
+private const val CACHE_MAX = 90 // ×1 МБ видеопамяти на плитку
 private const val BASE_LEVEL = 0 // подложка: весь круг ~4 плитки, всегда в кэше
-private const val WORKERS = 2
+private val WORKERS = (Runtime.getRuntime().availableProcessors() - 2).coerceIn(2, 4)
 private val SQRT2 = sqrt(2.0)
 
 fun levelScale(l: Int): Double = 2.0.pow(l / 2.0)
@@ -62,22 +62,67 @@ class TileScene(
 )
 
 class TileJobResult(
-    val k: Long, val l: Int, val i: Int, val j: Int, val gen: Int,
+    val k: Long, val l: Int, val i: Int, val j: Int, val gen: Int, val tm: TimeMap,
     val main: Picture?, val tiers: Array<Picture?>?, val mask: Int, val ms: Double,
 )
 
-private class Tile(val l: Int, val i: Int, val j: Int) {
+/**
+ * ВАЖНО (грабли v0.13): HWUI выкидывает display list и растровый слой узла,
+ * как только узел хотя бы на кадр выпал из дерева отрисовки. Java-объект
+ * остаётся, drawRenderNode рисует ПУСТОТУ — «дыра», о которой движок не знает.
+ * Поэтому плитка хранит свою Picture и перед показом проверяет hasDisplayList(),
+ * а невидимые плитки кэша каждый кадр «держатся» в дереве под пустым клипом.
+ */
+private class Tile(val l: Int, val i: Int, val j: Int, val tm: TimeMap) {
     var gen = -1
     var empty = false
+    var pic: Picture? = null
+    var tierPics: Array<Picture?>? = null
     var node: RenderNode? = null
     var tierNodes: Array<RenderNode?>? = null
     var mask = 0
     var shown = false
     var used = 0L
+    var drawnAt = 0L
+    /** Прежняя версия (старое поколение): видна, пока новая ждёт очереди на показ. */
+    var prev: Tile? = null
+
+    /** Узлы живы (display list не выкинут системой)? */
+    fun live(): Boolean = empty || (node?.hasDisplayList() == true &&
+        (tierNodes?.all { it == null || it.hasDisplayList() } ?: true))
+
+    /** Перезаписать узлы из сохранённых Picture (растеризуются заново при показе). */
+    fun revive() {
+        if (empty) return
+        val p = pic ?: return
+        val n = node ?: RenderNode("tile").apply {
+            setUseCompositingLayer(true, Paint(Paint.FILTER_BITMAP_FLAG))
+            setPosition(0, 0, TILE, TILE)
+        }.also { node = it }
+        if (!n.hasDisplayList()) {
+            val c = n.beginRecording(TILE, TILE)
+            try { c.drawPicture(p) } finally { n.endRecording() }
+        }
+        val tp = tierPics ?: return
+        val tn = tierNodes ?: arrayOfNulls<RenderNode>(TIER_N).also { tierNodes = it }
+        for (k in 0 until TIER_N) {
+            val q = tp[k] ?: continue
+            val node = tn[k] ?: RenderNode("tier").apply {
+                setHasOverlappingRendering(false)
+                setPosition(0, 0, TILE, TILE)
+            }.also { tn[k] = it }
+            if (!node.hasDisplayList()) {
+                val c = node.beginRecording(TILE, TILE)
+                try { c.drawPicture(q) } finally { node.endRecording() }
+            }
+        }
+    }
 
     fun release() {
         node?.discardDisplayList(); node = null
         tierNodes?.forEach { it?.discardDisplayList() }; tierNodes = null
+        pic = null; tierPics = null
+        prev?.release(); prev = null
     }
 }
 
@@ -107,6 +152,9 @@ class TileEngine(private val onReady: () -> Unit, private val post: (Runnable) -
     var lastHoles = 0
         private set
     val pendingCount get() = inflight.size
+    /** Сколько раз плитку пришлось оживить (система выкинула узел) — счётчик для отладки. */
+    var revivedTotal = 0L
+        private set
 
     /** Новые данные/настройки/ориентация: всё устаревает, но старое видно, пока не заменено. */
     fun setScene(sc: TileScene, dropAll: Boolean) {
@@ -191,7 +239,7 @@ class TileEngine(private val onReady: () -> Unit, private val post: (Runnable) -
     private fun record(sc: TileScene, l: Int, i: Int, j: Int, lodOf: (TileScene, Int, Int, Int) -> Lod): TileJobResult {
         val t0 = System.nanoTime()
         val k = key(l, i, j)
-        if (emptyTile(sc, l, i, j)) return TileJobResult(k, l, i, j, sc.gen, null, null, 0, 0.0)
+        if (emptyTile(sc, l, i, j)) return TileJobResult(k, l, i, j, sc.gen, sc.tm, null, null, 0, 0.0)
         val sL = levelScale(l)
         val lod = lodOf(sc, l, i, j)
         val main = Picture()
@@ -220,7 +268,7 @@ class TileEngine(private val onReady: () -> Unit, private val post: (Runnable) -
         }
         main.endRecording()
         for (p in tiers) p?.endRecording()
-        return TileJobResult(k, l, i, j, sc.gen, main, tiers, mask, (System.nanoTime() - t0) / 1e6)
+        return TileJobResult(k, l, i, j, sc.gen, sc.tm, main, tiers, mask, (System.nanoTime() - t0) / 1e6)
     }
 
     private fun submit(l: Int, i: Int, j: Int, lodOf: (TileScene, Int, Int, Int) -> Lod) {
@@ -244,29 +292,23 @@ class TileEngine(private val onReady: () -> Unit, private val post: (Runnable) -
         val old = cache[k]
         // Ответ на устаревшие данные годится только как замена «ничего».
         if (r.gen != sc.gen && old != null) { onReady(); return }
-        val t = Tile(r.l, r.i, r.j)
+        val t = Tile(r.l, r.i, r.j, r.tm)
         t.gen = r.gen
         t.used = frame
         if (r.main == null) t.empty = true
         else {
-            t.node = RenderNode("tile").apply {
-                setUseCompositingLayer(true, Paint(Paint.FILTER_BITMAP_FLAG))
-                setPosition(0, 0, TILE, TILE)
-                val c = beginRecording(TILE, TILE)
-                try { c.drawPicture(r.main) } finally { endRecording() }
-            }
+            t.pic = r.main
             t.mask = r.mask
-            if (r.mask != 0) t.tierNodes = Array(TIER_N) { n ->
-                if (r.mask and (1 shl n) == 0 || r.tiers!![n] == null) null
-                else RenderNode("tier").apply {
-                    setHasOverlappingRendering(false)
-                    setPosition(0, 0, TILE, TILE)
-                    val c = beginRecording(TILE, TILE)
-                    try { c.drawPicture(r.tiers!![n]!!) } finally { endRecording() }
-                }
-            }
+            if (r.mask != 0) t.tierPics = Array(TIER_N) { n -> if (r.mask and (1 shl n) == 0) null else r.tiers!![n] }
+            t.revive()
         }
-        old?.release()
+        // Старую версию не выкидываем, пока новая не показана: иначе — кадры с дырой/подложкой.
+        if (old != null) {
+            if (old.shown && !old.empty && old.live()) {
+                old.prev?.let { deferRelease(it) }; old.prev = null
+                t.prev = old
+            } else deferRelease(old)
+        }
         cache[k] = t
         onReady()
     }
@@ -282,13 +324,18 @@ class TileEngine(private val onReady: () -> Unit, private val post: (Runnable) -
      * Возвращает true, если ещё что-то догружается (нужен следующий кадр).
      */
     fun draw(
-        canvas: Canvas, s: Double, th: Double, ox: Double, oy: Double, w: Double, h: Double,
+        canvas: Canvas, s: Double, camTh: Double, ox: Double, oy: Double, w: Double, h: Double,
         vx: Double, vy: Double, vth: Double, vls: Double,
         tierAlpha: (Int) -> Float,
         lodOf: (TileScene, Int, Int, Int) -> Lod,
+        rotOf: (TimeMap) -> Double,
     ): Boolean {
         val sc = scene ?: return false
         frame++
+        this.camTh = camTh; this.rotOf = rotOf; rotMemo.clear()
+        // Поворот круга во времени считается от «сейчас» КАЖДОЙ плитки (её TimeMap):
+        // плитки разных поколений стыкуются без сдвига.
+        val th = camTh + rotFor(sc.tm)
         // Уровень с гистерезисом: не скакать туда-сюда на границе.
         val want = levelFor(s)
         if (level == Int.MIN_VALUE) level = want
@@ -314,11 +361,18 @@ class TileEngine(private val onReady: () -> Unit, private val post: (Runnable) -
                 t.used = frame
                 if (t.gen != sc.gen) addWant(L, i, j, s, th, ox, oy, w, h, 0)
                 if (t.empty) continue
-                if (t.shown || fresh < NEW_PER_FRAME) {
-                    if (!t.shown) { fresh++; t.shown = true }
-                    drawTile(canvas, t, s, th, ox, oy, alphas)
+                val live = t.live()
+                if ((t.shown && live) || fresh < NEW_PER_FRAME) {
+                    if (!live) { t.revive(); revivedTotal++ }
+                    if (!t.shown || !live) { fresh++; t.shown = true }
+                    t.prev?.let { p -> t.prev = null; deferRelease(p) }
+                    drawTile(canvas, t, s, ox, oy, alphas)
                     drawn = true
-                } else pending = true // готова, но ждёт очереди на растеризацию
+                } else {
+                    pending = true // готова, но ждёт очереди на растеризацию
+                    val p = t.prev
+                    if (p != null && p.live()) { p.used = frame; drawTile(canvas, p, s, ox, oy, alphas); drawn = true }
+                }
             } else {
                 if (emptyTile(sc, L, i, j)) continue
                 addWant(L, i, j, s, th, ox, oy, w, h, 0)
@@ -378,18 +432,45 @@ class TileEngine(private val onReady: () -> Unit, private val post: (Runnable) -
         }
 
         // Отправить в работу самые нужные (ближе к центру экрана, видимые первыми).
-        if (inflight.size < WORKERS * 2) {
+        if (inflight.size < WORKERS * 3) {
             wantList.sortBy { it[0] }
             for (wnt in wantList) {
-                if (inflight.size >= WORKERS * 2) break
+                if (inflight.size >= WORKERS * 3) break
                 val l = wnt[1].toInt(); val i = wnt[2].toInt(); val j = wnt[3].toInt()
                 if (key(l, i, j) in inflight) continue
                 submit(l, i, j, lodOf)
             }
         }
         evict()
+        keepAlive(canvas)
         // Недостающие плитки сами позовут кадр, когда придут (onReady).
         return pending
+    }
+
+    private var camTh = 0.0
+    private var rotOf: (TimeMap) -> Double = { 0.0 }
+    private val rotMemo = java.util.IdentityHashMap<TimeMap, Double>()
+    private fun rotFor(tm: TimeMap): Double = rotMemo.getOrPut(tm) { rotOf(tm) }
+
+    private val releaseQueue = ArrayList<Tile>()
+    /** Выкинуть узлы через кадр: текущий display list ещё может на них ссылаться. */
+    private fun deferRelease(t: Tile) { releaseQueue.add(t) }
+
+    /**
+     * Держать показанные плитки кэша в дереве HWUI: под пустым клипом они не
+     * рисуются, но система не выкидывает их display list и растровый слой.
+     */
+    private fun keepAlive(canvas: Canvas) {
+        canvas.save()
+        canvas.clipRect(0f, 0f, 0f, 0f)
+        for (t in cache.values) {
+            if (t.drawnAt == frame || !t.shown || t.empty) continue
+            val n = t.node ?: continue
+            if (!n.hasDisplayList()) continue
+            canvas.drawRenderNode(n)
+            t.tierNodes?.forEach { tn -> if (tn != null && tn.hasDisplayList()) canvas.drawRenderNode(tn) }
+        }
+        canvas.restore()
     }
 
     private fun addWant(l: Int, i: Int, j: Int, s: Double, th: Double, ox: Double, oy: Double, w: Double, h: Double, prio: Int) {
@@ -403,8 +484,9 @@ class TileEngine(private val onReady: () -> Unit, private val post: (Runnable) -
         wantList.add(longArrayOf(d, l.toLong(), i.toLong(), j.toLong()))
     }
 
-    private fun drawTile(canvas: Canvas, t: Tile, s: Double, th: Double, ox: Double, oy: Double, alphas: FloatArray) {
-        tileMatrix(m, t.l, t.i, t.j, s, th, ox, oy)
+    private fun drawTile(canvas: Canvas, t: Tile, s: Double, ox: Double, oy: Double, alphas: FloatArray) {
+        t.drawnAt = frame
+        tileMatrix(m, t.l, t.i, t.j, s, camTh + rotFor(t.tm), ox, oy)
         canvas.save()
         canvas.concat(m)
         t.node?.let { canvas.drawRenderNode(it) }
@@ -446,8 +528,11 @@ class TileEngine(private val onReady: () -> Unit, private val post: (Runnable) -
             for (jj in j0..j1) for (ii in i0..i1) {
                 val t = cache[key(l2, ii, jj)]!!
                 t.used = frame
-                t.shown = true
-                if (!t.empty) drawTile(canvas, t, s, th, ox, oy, alphas)
+                if (!t.empty) {
+                    if (!t.live()) { t.revive(); revivedTotal++ }
+                    t.shown = true
+                    drawTile(canvas, t, s, ox, oy, alphas)
+                }
             }
             canvas.restore()
             return true
@@ -461,9 +546,11 @@ class TileEngine(private val onReady: () -> Unit, private val post: (Runnable) -
      * держим: именно они закрывают дыры во время зума.
      */
     private fun evict() {
+        for (t in releaseQueue) t.release()
+        releaseQueue.clear()
         if (cache.size <= CACHE_MAX) return
         val L = level
-        val cand = cache.entries.filter { it.value.used < frame && it.value.l != BASE_LEVEL }
+        val cand = cache.entries.filter { it.value.drawnAt < frame && it.value.used < frame && it.value.l != BASE_LEVEL }
             .sortedWith(compareBy({ -levelDist(it.value.l, L) }, { it.value.used }))
         var n = cache.size - CACHE_MAX
         for (e in cand) {
