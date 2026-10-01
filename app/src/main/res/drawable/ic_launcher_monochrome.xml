@@ -1,11 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Монохромная иконка (тематические иконки Android 13+): кольцо + стрелка. -->
+<!-- Монохромная (тематические иконки Android 13+): та же форма по SPEC. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path android:fillColor="#FFFFFFFF" android:fillType="evenOdd" android:pathData="M54,24 A30,30 0 1,1 54,84 A30,30 0 1,1 54,24 Z M54,32 A22,22 0 1,0 54,76 A22,22 0 1,0 54,32 Z"/>
-    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="2.4" android:strokeLineCap="round"
-        android:pathData="M54,54 L54,87"/>
+    <path android:fillColor="#FFFFFFFF" android:pathData="M54,33 L42.42,73.37 A42,42 0 0 1 24.82,63.21 Z"/>
+    <!-- Стрелка вырезана из среднего сектора (evenOdd), кончик за дугой — залит. -->
+    <path android:fillColor="#FFFFFFFF" android:fillType="evenOdd" android:pathData="M54,33 L64.16,73.75 A42,42 0 0 1 43.84,73.75 Z M53.2,33 L54.8,33 L54.8,76.5 L54,81 L53.2,76.5 Z"/>
+    <path android:fillColor="#FFFFFFFF" android:pathData="M54,33 L83.18,63.21 A42,42 0 0 1 65.58,73.37 Z"/>
 </vector>
