@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- updatePeriodMillis = 0: обновления — свой будильник без пробуждения (WheelWidget.schedule). -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="110dp"
+    android:minHeight="110dp"
+    android:minResizeWidth="50dp"
+    android:minResizeHeight="50dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="2"
+    android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/widget_wheel"
+    android:previewImage="@drawable/ic_launcher_foreground"
+    android:configure="com.circularcalendar.app.WidgetConfigActivity"
+    android:widgetFeatures="reconfigurable"
+    android:description="@string/widget_desc"
+    android:widgetCategory="home_screen"/>

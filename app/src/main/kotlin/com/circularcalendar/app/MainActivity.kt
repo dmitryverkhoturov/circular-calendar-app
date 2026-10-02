@@ -284,6 +284,8 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         saveCamera()
+        // Виджеты подхватывают тему/настройки при выходе из приложения.
+        WheelWidget.refreshAll(this)
         super.onPause()
     }
 
