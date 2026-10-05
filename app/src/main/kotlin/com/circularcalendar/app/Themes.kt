@@ -95,15 +95,31 @@ val BACKDROPS = listOf(
 
 class FontChoice(
     val name: Int, val family: String, val style: Int, val caps: Boolean, val spacing: Float,
-    val res: Int = 0, // встроенный TTF (res/font, урезан до латиницы+кириллицы, один вес)
+    val res: Int = 0, // встроенный TTF (res/font, урезан: один вес, латиница+Latin Ext-A+кириллица)
+    val asset: String? = null, // оригинальный вариативный TTF из assets (не модифицируем — RFN в лицензии)
+    val weight: Int = 400,
 )
+
+private const val COMFORTAA = "fonts/Comfortaa[wght].ttf"
 
 /** Встроенные шрифты грузятся один раз из ресурсов (нужен Context — см. MainActivity). */
 object Fonts {
-    private val cache = HashMap<Int, Typeface>()
+    private val cache = HashMap<Any, Typeface>()
     var ctx: android.content.Context? = null
 
     fun of(f: FontChoice): Typeface {
+        if (f.asset != null) {
+            val key = f.asset + f.weight
+            cache[key]?.let { return it }
+            val c = ctx
+            if (c != null) {
+                try {
+                    return Typeface.Builder(c.assets, f.asset)
+                        .setFontVariationSettings("'wght' ${f.weight}").build()
+                        .also { cache[key] = it }
+                } catch (_: Exception) {}
+            }
+        }
         if (f.res != 0) {
             cache[f.res]?.let { return it }
             val c = ctx
@@ -123,12 +139,12 @@ val FONTS = listOf(
     FontChoice(R.string.f_serif, "serif", Typeface.BOLD, false, 0f),
     FontChoice(R.string.f_mono, "monospace", Typeface.BOLD, false, 0f),
     FontChoice(R.string.f_hand, "casual", Typeface.NORMAL, false, 0f),
-    // Встроенные (≈50 КБ каждый): мягкие, с кириллицей.
+    // Встроенные (≈100–140 КБ; Comfortaa — оригинал ≈200 КБ): мягкие, с кириллицей.
     FontChoice(R.string.f_nunito, "sans-serif-medium", Typeface.NORMAL, false, 0.01f, R.font.nunito),
-    FontChoice(R.string.f_comfortaa, "sans-serif-medium", Typeface.NORMAL, false, 0f, R.font.comfortaa),
+    FontChoice(R.string.f_comfortaa, "sans-serif-medium", Typeface.NORMAL, false, 0f, asset = COMFORTAA, weight = 700),
     FontChoice(R.string.f_rubik, "sans-serif-medium", Typeface.NORMAL, false, 0f, R.font.rubik),
     FontChoice(R.string.f_unbounded, "sans-serif-black", Typeface.NORMAL, false, 0f, R.font.unbounded),
-    FontChoice(R.string.f_comfortaa_caps, "sans-serif-light", Typeface.NORMAL, true, 0.18f, R.font.comfortaa),
+    FontChoice(R.string.f_comfortaa_caps, "sans-serif-light", Typeface.NORMAL, true, 0.18f, asset = COMFORTAA, weight = 700),
 )
 
 val PALETTE_NAMES = listOf(R.string.pal_calendar, R.string.pal_soft, R.string.pal_shades, R.string.pal_mono)
