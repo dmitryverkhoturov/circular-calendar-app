@@ -30,11 +30,11 @@ object CalendarRepo {
 
         /** Короткая строка для бейджа. */
         fun badgeText(): String = when {
-            error != null -> "ошибка: $error"
-            !permissionGranted -> "нет разрешения READ_CALENDAR"
-            !providerPresent -> "нет провайдера календаря!"
-            calendars.isEmpty() -> "разрешение есть, 0 кал. в провайдере"
-            else -> "${calendars.size} кал. · $eventCount соб."
+            error != null -> "error: $error"
+            !permissionGranted -> "no READ_CALENDAR permission"
+            !providerPresent -> "no calendar provider!"
+            calendars.isEmpty() -> "permission granted, 0 calendars in provider"
+            else -> "${calendars.size} cal. · $eventCount events"
         }
 
         val ok: Boolean get() = error == null && permissionGranted && calendars.isNotEmpty()
@@ -131,7 +131,7 @@ object CalendarRepo {
                             // EVENT_ID не уникален между экземплярами повтора —
                             // добавляем порядковый суффикс.
                             id = "${cur.getLong(0)}#${seq++}",
-                            title = cur.getString(1) ?: "(без названия)",
+                            title = cur.getString(1) ?: tr("(untitled)", "(без названия)"),
                             start = toLocal(begin),
                             end = toLocal(end),
                             color = color,

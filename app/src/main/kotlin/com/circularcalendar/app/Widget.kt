@@ -34,9 +34,9 @@ import kotlin.math.sin
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Масштабы виджета: название → зум. */
-val WIDGET_ZOOMS = listOf("Год" to 1.0, "Квартал" to 1.8, "Месяц" to 3.6, "Неделя" to 14.0)
-val WIDGET_POS = listOf("По центру", "Сверху", "Снизу")
-val WIDGET_CUTS = listOf("Кадр", "Месяцы", "Недели", "Дни")
+val WIDGET_ZOOMS = listOf(R.string.w_z_year to 1.0, R.string.w_z_quarter to 1.8, R.string.w_z_month to 3.6, R.string.w_z_week to 14.0)
+val WIDGET_POS = listOf(R.string.w_pos_center, R.string.w_pos_top, R.string.w_pos_bottom)
+val WIDGET_CUTS = listOf(R.string.w_cut_frame, R.string.w_cut_months, R.string.w_cut_weeks, R.string.w_cut_days)
 
 /**
  * Настройки одного виджета. [theme] −1 = как в приложении, иначе индекс в PRESETS.

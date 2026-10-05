@@ -286,23 +286,23 @@ fun buildMockEvents(year: Int): List<CalendarEvent> {
     fun d(y: Int, m: Int, day: Int) = LocalDateTime.of(y, m, day, 0, 0)
 
     return listOf(
-        CalendarEvent("m1", "Отпуск: море", d(year, 7, 14), d(year, 7, 28), teal, "personal"),
-        CalendarEvent("m2", "Командировка", d(year, 3, 10), d(year, 3, 17), blue, "work"),
-        CalendarEvent("m3", "Новый год в горах", d(year, 12, 29), d(year + 1, 1, 4), purple, "personal"),
-        CalendarEvent("m4", "Учёба: модуль 2", d(year, 9, 1), d(year, 9, 30), orange, "edu"),
-        CalendarEvent("m5", "Ремонт квартиры", d(year, 5, 15), d(year, 6, 10), red, "personal"),
-        CalendarEvent("m6", "Проект Alpha", d(year, 2, 1), d(year, 2, 20), blue, "work"),
-        CalendarEvent("m7", "Конференция", d(year, 2, 10), d(year, 2, 15), green, "work"),
-        CalendarEvent("m8", "Воркшоп", d(year, 2, 12), d(year, 2, 13), orange, "work"),
-        CalendarEvent("m9", "День рождения", d(year, 4, 17), d(year, 4, 18), purple, "personal", true),
-        CalendarEvent("m10", "День рождения друга", d(year, 8, 3), d(year, 8, 4), green, "personal", true),
-        CalendarEvent("m11", "Дедлайн проекта", d(year, 10, 31), d(year, 11, 1), red, "work", true),
-        CalendarEvent("m12", "Встреча команды", d(year, 6, 24), d(year, 6, 26), blue, "work"),
-        CalendarEvent("m13", "Техосмотр", d(year, 11, 5), d(year, 11, 7), orange, "personal"),
-        CalendarEvent("m14", "Хакатон", d(year, 4, 25), d(year, 4, 28), teal, "work"),
-        CalendarEvent("m15", "Курс английского", d(year, 6, 1), d(year, 6, 30), green, "edu"),
-        CalendarEvent("m16", "Пробежки", d(year, 6, 1), d(year, 8, 31), teal, "health"),
-        CalendarEvent("m17", "Диета", d(year, 6, 15), d(year, 7, 15), orange, "health"),
+        CalendarEvent("m1", tr("Vacation: seaside", "Отпуск: море"), d(year, 7, 14), d(year, 7, 28), teal, "personal"),
+        CalendarEvent("m2", tr("Business trip", "Командировка"), d(year, 3, 10), d(year, 3, 17), blue, "work"),
+        CalendarEvent("m3", tr("New Year in the mountains", "Новый год в горах"), d(year, 12, 29), d(year + 1, 1, 4), purple, "personal"),
+        CalendarEvent("m4", tr("Course: module 2", "Учёба: модуль 2"), d(year, 9, 1), d(year, 9, 30), orange, "edu"),
+        CalendarEvent("m5", tr("Apartment renovation", "Ремонт квартиры"), d(year, 5, 15), d(year, 6, 10), red, "personal"),
+        CalendarEvent("m6", tr("Project Alpha", "Проект Alpha"), d(year, 2, 1), d(year, 2, 20), blue, "work"),
+        CalendarEvent("m7", tr("Conference", "Конференция"), d(year, 2, 10), d(year, 2, 15), green, "work"),
+        CalendarEvent("m8", tr("Workshop", "Воркшоп"), d(year, 2, 12), d(year, 2, 13), orange, "work"),
+        CalendarEvent("m9", tr("Birthday", "День рождения"), d(year, 4, 17), d(year, 4, 18), purple, "personal", true),
+        CalendarEvent("m10", tr("Friend's birthday", "День рождения друга"), d(year, 8, 3), d(year, 8, 4), green, "personal", true),
+        CalendarEvent("m11", tr("Project deadline", "Дедлайн проекта"), d(year, 10, 31), d(year, 11, 1), red, "work", true),
+        CalendarEvent("m12", tr("Team offsite", "Встреча команды"), d(year, 6, 24), d(year, 6, 26), blue, "work"),
+        CalendarEvent("m13", tr("Car inspection", "Техосмотр"), d(year, 11, 5), d(year, 11, 7), orange, "personal"),
+        CalendarEvent("m14", tr("Hackathon", "Хакатон"), d(year, 4, 25), d(year, 4, 28), teal, "work"),
+        CalendarEvent("m15", tr("English course", "Курс английского"), d(year, 6, 1), d(year, 6, 30), green, "edu"),
+        CalendarEvent("m16", tr("Running", "Пробежки"), d(year, 6, 1), d(year, 8, 31), teal, "health"),
+        CalendarEvent("m17", tr("Diet", "Диета"), d(year, 6, 15), d(year, 7, 15), orange, "health"),
     ) + shortMock(blue, green, orange, teal)
 }
 
@@ -311,13 +311,13 @@ private fun shortMock(vararg c: Int): List<CalendarEvent> {
     val t = LocalDateTime.now().toLocalDate().atStartOfDay()
     fun at(day: Long, h: Int, m: Int) = t.plusDays(day).withHour(h).withMinute(m)
     return listOf(
-        CalendarEvent("s1", "Созвон с командой", at(0, 10, 0), at(0, 11, 0), c[0], "work"),
-        CalendarEvent("s2", "Обед", at(0, 13, 0), at(0, 14, 0), c[1], "personal"),
-        CalendarEvent("s3", "Стоматолог", at(1, 9, 30), at(1, 10, 15), c[2], "personal"),
-        CalendarEvent("s4", "Тренировка", at(1, 18, 0), at(1, 19, 30), c[3], "health"),
-        CalendarEvent("s5", "Ревью", at(1, 18, 30), at(1, 19, 0), c[0], "work"),
-        CalendarEvent("s6", "Звонок маме", at(2, 20, 0), at(2, 20, 15), c[1], "personal"),
-        CalendarEvent("s7", "Йога", at(-1, 8, 0), at(-1, 9, 0), c[3], "health"),
+        CalendarEvent("s1", tr("Team call", "Созвон с командой"), at(0, 10, 0), at(0, 11, 0), c[0], "work"),
+        CalendarEvent("s2", tr("Lunch", "Обед"), at(0, 13, 0), at(0, 14, 0), c[1], "personal"),
+        CalendarEvent("s3", tr("Dentist", "Стоматолог"), at(1, 9, 30), at(1, 10, 15), c[2], "personal"),
+        CalendarEvent("s4", tr("Workout", "Тренировка"), at(1, 18, 0), at(1, 19, 30), c[3], "health"),
+        CalendarEvent("s5", tr("Review", "Ревью"), at(1, 18, 30), at(1, 19, 0), c[0], "work"),
+        CalendarEvent("s6", tr("Call mom", "Звонок маме"), at(2, 20, 0), at(2, 20, 15), c[1], "personal"),
+        CalendarEvent("s7", tr("Yoga", "Йога"), at(-1, 8, 0), at(-1, 9, 0), c[3], "health"),
     )
 }
 
@@ -332,22 +332,26 @@ fun buildStressEvents(year: Int): List<CalendarEvent> {
     var day = LocalDateTime.of(year - 1, 7, 1, 0, 0)
     val end = LocalDateTime.of(year + 1, 7, 1, 0, 0)
     var n = 0
-    val names = arrayOf("Стендап", "Созвон с командой", "Обед", "Тренировка", "Планирование спринта", "1:1 с руководителем", "Английский", "Дорога", "Ревью дизайна", "Йога")
+    val names = arrayOf(tr("Standup", "Стендап"), tr("Team call", "Созвон с командой"), tr("Lunch", "Обед"), tr("Workout", "Тренировка"), tr("Sprint planning", "Планирование спринта"), tr("1:1 with manager", "1:1 с руководителем"), tr("English", "Английский"), tr("Commute", "Дорога"), tr("Design review", "Ревью дизайна"), tr("Yoga", "Йога"))
     while (day < end) {
         val dow = day.dayOfWeek.value
         if (dow <= 5) {
-            out.add(CalendarEvent("w${n++}", "Стендап", day.withHour(10), day.withHour(10).withMinute(15), cols[0], "work"))
-            out.add(CalendarEvent("w${n++}", "Обед", day.withHour(13), day.withHour(14), cols[1], "personal"))
+            out.add(CalendarEvent("w${n++}", tr("Standup", "Стендап"), day.withHour(10), day.withHour(10).withMinute(15), cols[0], "work"))
+            out.add(CalendarEvent("w${n++}", tr("Lunch", "Обед"), day.withHour(13), day.withHour(14), cols[1], "personal"))
             repeat(rnd.nextInt(4)) {
                 val h = 11 + rnd.nextInt(7)
                 val len = 30L * (1 + rnd.nextInt(3))
                 out.add(CalendarEvent("w${n++}", names[rnd.nextInt(names.size)], day.withHour(h), day.withHour(h).plusMinutes(len), cols[rnd.nextInt(6)], "work"))
             }
         }
-        if (dow == 2 || dow == 4) out.add(CalendarEvent("w${n++}", "Тренировка", day.withHour(19), day.withHour(20).withMinute(30), cols[4], "health"))
-        if (rnd.nextInt(12) == 0) out.add(CalendarEvent("w${n++}", "День рождения", day, day.plusDays(1), cols[3], "personal", true))
-        if (rnd.nextInt(25) == 0) out.add(CalendarEvent("w${n++}", "Поездка", day, day.plusDays(2L + rnd.nextInt(6)), cols[5], "personal"))
+        if (dow == 2 || dow == 4) out.add(CalendarEvent("w${n++}", tr("Workout", "Тренировка"), day.withHour(19), day.withHour(20).withMinute(30), cols[4], "health"))
+        if (rnd.nextInt(12) == 0) out.add(CalendarEvent("w${n++}", tr("Birthday", "День рождения"), day, day.plusDays(1), cols[3], "personal", true))
+        if (rnd.nextInt(25) == 0) out.add(CalendarEvent("w${n++}", tr("Trip", "Поездка"), day, day.plusDays(2L + rnd.nextInt(6)), cols[5], "personal"))
         day = day.plusDays(1)
     }
     return out + buildMockEvents(year)
 }
+
+/** Строка на языке системы для текста вне Activity (мок-события и т.п.). UI — через res/values. */
+fun tr(en: String, ru: String): String =
+    if (java.util.Locale.getDefault().language == "ru") ru else en

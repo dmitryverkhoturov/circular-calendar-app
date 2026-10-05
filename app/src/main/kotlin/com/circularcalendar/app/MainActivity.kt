@@ -530,13 +530,13 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
 
         // ═════ Дизайн ═════
-        col.addView(label("Стиль"))
+        col.addView(label(getString(R.string.design_style)))
         space(6f)
         val presetIdx = PRESETS.indexOfFirst { it.second.preset == d.preset }
-        toggleGrid(col, PRESETS.map { it.first }, presetIdx, 3) { i -> applyDesign(PRESETS[i].second) }
+        toggleGrid(col, PRESETS.map { getString(it.first) }, presetIdx, 3) { i -> applyDesign(PRESETS[i].second) }
         space(12f)
 
-        col.addView(label("Главный цвет"))
+        col.addView(label(getString(R.string.accent_color)))
         space(8f)
         run {
             val row = LinearLayout(this).apply {
@@ -556,72 +556,72 @@ class MainActivity : Activity() {
             var h = hsl[0].toDouble(); if (h < 200) h += 360
             var sat = hsl[1].toDouble(); var lit = hsl[2].toDouble()
             fun push() = applyDesignLive(settings.design.copy(accent = hslToColor(h.toFloat(), sat.toFloat(), lit.toFloat()), preset = "custom"))
-            full(slider("Оттенок (фиолет ← → малина)", h, 260.0, 380.0, "%.0f°") { h = it; push() })
-            full(slider("Сочность", sat, 0.0, 100.0, "%.0f") { sat = it; push() })
-            full(slider("Светлота", lit, 10.0, 90.0, "%.0f") { lit = it; push() })
+            full(slider(getString(R.string.hue), h, 260.0, 380.0, "%.0f°") { h = it; push() })
+            full(slider(getString(R.string.saturation), sat, 0.0, 100.0, "%.0f") { sat = it; push() })
+            full(slider(getString(R.string.lightness), lit, 10.0, 90.0, "%.0f") { lit = it; push() })
         }
         space(12f)
 
-        col.addView(label("Центр"))
+        col.addView(label(getString(R.string.center)))
         space(6f)
-        col.addView(toggle(listOf("Кольцо с дыркой", "Залит"), if (d.ring) 0 else 1) { i ->
+        col.addView(toggle(listOf(getString(R.string.center_ring), getString(R.string.center_filled)), if (d.ring) 0 else 1) { i ->
             applyDesign(d.copy(ring = i == 0, hole = if (i == 0 && d.hole < 0.05f) 0.3f else d.hole, preset = "custom"))
         })
         space(2f)
         fun dsl(title: String, v: Float, lo: Double, hi: Double, set: (Design, Float) -> Design) =
             full(slider(title, v.toDouble(), lo, hi, "%.2f") { x -> applyDesignLive(set(settings.design, x.toFloat()).copy(preset = "custom")) })
-        if (d.ring) dsl("Размер дырки", d.hole, 0.05, 0.7) { o, x -> o.copy(hole = x) }
-        dsl("Градиент (0 = из прозрачного)", d.grad, 0.0, 1.0) { o, x -> o.copy(grad = x) }
-        dsl("Цвет в заливке", d.tint, 0.0, 1.0) { o, x -> o.copy(tint = x) }
-        dsl("Прошлое темнее", d.pastDim, 0.0, 1.0) { o, x -> o.copy(pastDim = x) }
+        if (d.ring) dsl(getString(R.string.hole_size), d.hole, 0.05, 0.7) { o, x -> o.copy(hole = x) }
+        dsl(getString(R.string.gradient), d.grad, 0.0, 1.0) { o, x -> o.copy(grad = x) }
+        dsl(getString(R.string.fill_tint), d.tint, 0.0, 1.0) { o, x -> o.copy(tint = x) }
+        dsl(getString(R.string.past_dim), d.pastDim, 0.0, 1.0) { o, x -> o.copy(pastDim = x) }
         if (d.ring) {
             space(4f)
-            col.addView(toggle(listOf("Обвод дырки", "Без обвода"), if (d.holeLine) 0 else 1) { i ->
+            col.addView(toggle(listOf(getString(R.string.hole_outline), getString(R.string.no_outline)), if (d.holeLine) 0 else 1) { i ->
                 applyDesign(d.copy(holeLine = i == 0, preset = "custom"))
             })
         }
         space(12f)
 
-        col.addView(label("Фон"))
+        col.addView(label(getString(R.string.background)))
         space(6f)
-        toggleGrid(col, BACKDROPS.map { it.name }, d.backdrop, 3) { i -> applyDesign(d.copy(backdrop = i, preset = "custom")) }
+        toggleGrid(col, BACKDROPS.map { getString(it.name) }, d.backdrop, 3) { i -> applyDesign(d.copy(backdrop = i, preset = "custom")) }
         space(12f)
 
-        col.addView(label("Эффекты"))
-        dsl("Свечение", d.glow, 0.0, 1.0) { o, x -> o.copy(glow = x) }
-        dsl("Зерно", d.grain, 0.0, 1.0) { o, x -> o.copy(grain = x) }
-        dsl("Объём", d.volume, 0.0, 1.0) { o, x -> o.copy(volume = x) }
-        dsl("Обводка событий", d.outline, 0.0, 1.0) { o, x -> o.copy(outline = x) }
+        col.addView(label(getString(R.string.effects)))
+        dsl(getString(R.string.glow), d.glow, 0.0, 1.0) { o, x -> o.copy(glow = x) }
+        dsl(getString(R.string.grain), d.grain, 0.0, 1.0) { o, x -> o.copy(grain = x) }
+        dsl(getString(R.string.volume), d.volume, 0.0, 1.0) { o, x -> o.copy(volume = x) }
+        dsl(getString(R.string.event_outline), d.outline, 0.0, 1.0) { o, x -> o.copy(outline = x) }
         space(4f)
-        col.addView(toggle(listOf("Звёзды", "Без звёзд"), if (d.stars) 0 else 1) { i ->
+        col.addView(toggle(listOf(getString(R.string.stars), getString(R.string.no_stars)), if (d.stars) 0 else 1) { i ->
             applyDesign(d.copy(stars = i == 0, preset = "custom"))
         })
         space(4f)
-        col.addView(toggle(listOf("Лучи по дням", "Без лучей"), if (d.rays) 0 else 1) { i ->
+        col.addView(toggle(listOf(getString(R.string.day_rays), getString(R.string.no_rays)), if (d.rays) 0 else 1) { i ->
             applyDesign(d.copy(rays = i == 0, preset = "custom"))
         })
         space(12f)
 
-        col.addView(label("События"))
+        col.addView(label(getString(R.string.events)))
         space(6f)
-        col.addView(toggle(listOf("Пилюли", "Ленты"), if (d.roundEvents) 0 else 1) { i ->
+        col.addView(toggle(listOf(getString(R.string.pills), getString(R.string.ribbons)), if (d.roundEvents) 0 else 1) { i ->
             applyDesign(d.copy(roundEvents = i == 0, preset = "custom"))
         })
         space(4f)
-        toggleGrid(col, PALETTE_NAMES, d.palette, 2) { i -> applyDesign(d.copy(palette = i, preset = "custom")) }
+        toggleGrid(col, PALETTE_NAMES.map(::getString), d.palette, 2) { i -> applyDesign(d.copy(palette = i, preset = "custom")) }
         space(12f)
 
-        col.addView(label("Шрифт"))
+        col.addView(label(getString(R.string.font)))
         space(6f)
-        toggleGrid(col, FONTS.map { it.name }, d.font, 3) { i -> applyDesign(d.copy(font = i, preset = "custom")) }
+        toggleGrid(col, FONTS.map { getString(it.name) }, d.font, 3) { i -> applyDesign(d.copy(font = i, preset = "custom")) }
         space(12f)
 
-        col.addView(label("Стрелка «сейчас»"))
+        col.addView(label(getString(R.string.now_arrow)))
         space(6f)
-        col.addView(toggle(ARROW_NAMES, d.arrow) { i -> applyDesign(d.copy(arrow = i, preset = "custom")) })
+        col.addView(toggle(ARROW_NAMES.map(::getString), d.arrow) { i -> applyDesign(d.copy(arrow = i, preset = "custom")) })
         space(10f)
         full(TextView(this).apply {
-            text = "Скопировать дизайн (для чата)"
+            text = getString(R.string.copy_design)
             textSize = 12f
             gravity = Gravity.CENTER
             setPadding(0, dp(8f), 0, dp(8f))
@@ -630,104 +630,104 @@ class MainActivity : Activity() {
             setOnClickListener {
                 val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
                 cm.setPrimaryClip(android.content.ClipData.newPlainText("design", settings.design.toJson()))
-                text = "Скопировано"
+                text = getString(R.string.copied)
             }
         })
         space(18f)
 
         // ═════ Поведение ═════
-        col.addView(label("Ориентация круга"))
+        col.addView(label(getString(R.string.orientation)))
         space(6f)
-        col.addView(toggle(listOf("Против часовой", "По часовой"),
+        col.addView(toggle(listOf(getString(R.string.ccw), getString(R.string.cw)),
             if (settings.counterClockwise) 0 else 1) { i ->
             applySettings(settings.copy(counterClockwise = i == 0))
         })
         space(14f)
 
-        col.addView(label("«Сейчас» по умолчанию"))
+        col.addView(label(getString(R.string.now_default)))
         space(6f)
-        col.addView(toggle(listOf("Внизу", "Вверху"),
+        col.addView(toggle(listOf(getString(R.string.bottom), getString(R.string.top)),
             if (settings.nowAtBottom) 0 else 1) { i ->
             applySettings(settings.copy(nowAtBottom = i == 0))
         })
         space(14f)
 
-        col.addView(label("Крупные события"))
+        col.addView(label(getString(R.string.major_events)))
         space(6f)
         // «Снизу» — крупные у кольца дней (как раньше); «Сверху» — иерархия
         // длительности: из пересекающихся длинное уходит дальше от кольца.
-        col.addView(toggle(listOf("Снизу", "Сверху"),
+        col.addView(toggle(listOf(getString(R.string.below), getString(R.string.above)),
             if (settings.largeEventsOnTop) 1 else 0) { i ->
             applySettings(settings.copy(largeEventsOnTop = i == 1))
         })
         space(14f)
 
-        col.addView(label("Орбита Земли"))
+        col.addView(label(getString(R.string.earth_orbit)))
         space(6f)
         // Равномерно — все дни одной ширины; Кеплер — реальная скорость Земли:
         // у перигелия (январь) дни шире, Земля и стрелка ближе к Солнцу.
-        col.addView(toggle(listOf("Равномерно", "Кеплер"),
+        col.addView(toggle(listOf(getString(R.string.uniform), getString(R.string.kepler)),
             if (settings.keplerOrbit) 1 else 0) { i ->
             applySettings(settings.copy(keplerOrbit = i == 1))
         })
         space(14f)
 
-        col.addView(label("Что движется со временем"))
+        col.addView(label(getString(R.string.what_moves)))
         space(6f)
         // Круг — «сейчас» всегда внизу, год прокручивается; стрелка — круг
         // стоит, стрелка с Землёй и планеты идут сами (как часы на стене).
-        col.addView(toggle(listOf("Круг", "Стрелка"),
+        col.addView(toggle(listOf(getString(R.string.wheel), getString(R.string.hand)),
             if (settings.arrowMoves) 1 else 0) { i ->
             applySettings(settings.copy(arrowMoves = i == 1))
         })
         space(14f)
 
-        col.addView(label("Орбиты планет"))
+        col.addView(label(getString(R.string.planet_orbits)))
         space(6f)
-        col.addView(toggle(listOf("Скрыты", "Показаны"),
+        col.addView(toggle(listOf(getString(R.string.hidden), getString(R.string.shown)),
             if (settings.showOrbits) 1 else 0) { i ->
             applySettings(settings.copy(showOrbits = i == 1))
         })
         space(14f)
 
-        col.addView(label("Счётчик кадров"))
+        col.addView(label(getString(R.string.fps_counter)))
         space(6f)
-        col.addView(toggle(listOf("Скрыт", "Показан"), if (wheel.perfHud) 1 else 0) { i ->
+        col.addView(toggle(listOf(getString(R.string.hidden_m), getString(R.string.shown_m)), if (wheel.perfHud) 1 else 0) { i ->
             wheel.perfHud = i == 1
             getSharedPreferences("settings", MODE_PRIVATE).edit().putBoolean("perfHud", i == 1).apply()
         })
         space(14f)
 
 
-        col.addView(label("Анимация"))
+        col.addView(label(getString(R.string.animation)))
         space(4f)
-        full(slider("Затухание инерции", motion.friction, 1.5, 20.0, "%.1f") {
+        full(slider(getString(R.string.friction), motion.friction, 1.5, 20.0, "%.1f") {
             applyMotion(motion.copy(friction = it))
         })
-        full(slider("Сила броска", motion.launch, 0.2, 2.5, "%.2f") {
+        full(slider(getString(R.string.fling), motion.launch, 0.2, 2.5, "%.2f") {
             applyMotion(motion.copy(launch = it))
         })
-        full(slider("Жёсткость пружины", motion.spring, 6.0, 45.0, "%.0f") {
+        full(slider(getString(R.string.spring), motion.spring, 6.0, 45.0, "%.0f") {
             applyMotion(motion.copy(spring = it))
         })
-        full(slider("Упругость (меньше = пружинит)", motion.damping, 0.35, 1.0, "%.2f") {
+        full(slider(getString(R.string.damping), motion.damping, 0.35, 1.0, "%.2f") {
             applyMotion(motion.copy(damping = it))
         })
-        full(slider("Разгон повторным броском", motion.boost, 0.0, 1.5, "%.2f") {
+        full(slider(getString(R.string.boost), motion.boost, 0.0, 1.5, "%.2f") {
             applyMotion(motion.copy(boost = it))
         })
-        full(slider("Порог вращения двумя пальцами, °", motion.rotThreshold, 0.0, 30.0, "%.0f") {
+        full(slider(getString(R.string.rot_threshold), motion.rotThreshold, 0.0, 30.0, "%.0f") {
             applyMotion(motion.copy(rotThreshold = it))
         })
-        full(slider("Рост порога при зуме, ° на ×2", motion.rotZoomK, 0.0, 80.0, "%.0f") {
+        full(slider(getString(R.string.rot_zoom), motion.rotZoomK, 0.0, 80.0, "%.0f") {
             applyMotion(motion.copy(rotZoomK = it))
         })
-        full(slider("Догон пальцев после порога", motion.rotCatchUp, 3.0, 40.0, "%.0f") {
+        full(slider(getString(R.string.rot_catchup), motion.rotCatchUp, 3.0, 40.0, "%.0f") {
             applyMotion(motion.copy(rotCatchUp = it))
         })
         space(4f)
         col.addView(TextView(this).apply {
-            text = "Анимация по умолчанию"
+            text = getString(R.string.animation_reset)
             textSize = 11f
             gravity = Gravity.CENTER
             setPadding(0, dp(5f), 0, dp(5f))
@@ -755,7 +755,7 @@ class MainActivity : Activity() {
                 }
         if (entries.isNotEmpty()) {
             space(14f)
-            col.addView(label("Календари"))
+            col.addView(label(getString(R.string.calendars)))
             space(6f)
             val allIds = entries.map { it.first }.toSet()
             for ((id, name, color) in entries) {
@@ -791,7 +791,7 @@ class MainActivity : Activity() {
         // Обновление событий вручную.
         space(14f)
         col.addView(TextView(this).apply {
-            text = "Обновить события"
+            text = getString(R.string.refresh_events)
             textSize = 12f
             gravity = Gravity.CENTER
             setPadding(0, dp(7f), 0, dp(7f))

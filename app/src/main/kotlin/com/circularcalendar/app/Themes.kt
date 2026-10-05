@@ -73,7 +73,7 @@ fun colorToHsl(c: Int): FloatArray {
 // ── Фоны ─────────────────────────────────────────────────────────────────────
 
 class Backdrop(
-    val name: String,
+    val name: Int, // R.string
     val bg0: Int,      // центр фонового градиента
     val bg1: Int,      // края
     val surface: Int,  // основа заливки круга
@@ -83,18 +83,18 @@ class Backdrop(
 )
 
 val BACKDROPS = listOf(
-    Backdrop("Космос", 0xFF211857.toInt(), 0xFF0A0722.toInt(), 0xFF2C2163.toInt(), 0xFFF6F0FF.toInt(), WHITE, true),
-    Backdrop("Слива", 0xFF2B0F2C.toInt(), 0xFF10050F.toInt(), 0xFF3A1638.toInt(), 0xFFFFEFF7.toInt(), WHITE, true),
-    Backdrop("Ночь", 0xFF0D1017.toInt(), 0xFF090B10.toInt(), 0xFF141B2E.toInt(), WHITE, WHITE, true),
-    Backdrop("Уголь", 0xFF151515.toInt(), 0xFF070707.toInt(), 0xFF1B1B1B.toInt(), WHITE, WHITE, true),
-    Backdrop("Бумага", 0xFFF3EEE3.toInt(), 0xFFE5DECE.toInt(), 0xFFEAE2D3.toInt(), null, null, false),
-    Backdrop("Мел", 0xFFF5F5F2.toInt(), 0xFFE4E4E0.toInt(), 0xFFEEEEEA.toInt(), 0xFF141414.toInt(), 0xFF141414.toInt(), false),
+    Backdrop(R.string.bd_space, 0xFF211857.toInt(), 0xFF0A0722.toInt(), 0xFF2C2163.toInt(), 0xFFF6F0FF.toInt(), WHITE, true),
+    Backdrop(R.string.bd_plum, 0xFF2B0F2C.toInt(), 0xFF10050F.toInt(), 0xFF3A1638.toInt(), 0xFFFFEFF7.toInt(), WHITE, true),
+    Backdrop(R.string.bd_night, 0xFF0D1017.toInt(), 0xFF090B10.toInt(), 0xFF141B2E.toInt(), WHITE, WHITE, true),
+    Backdrop(R.string.bd_coal, 0xFF151515.toInt(), 0xFF070707.toInt(), 0xFF1B1B1B.toInt(), WHITE, WHITE, true),
+    Backdrop(R.string.bd_paper, 0xFFF3EEE3.toInt(), 0xFFE5DECE.toInt(), 0xFFEAE2D3.toInt(), null, null, false),
+    Backdrop(R.string.bd_chalk, 0xFFF5F5F2.toInt(), 0xFFE4E4E0.toInt(), 0xFFEEEEEA.toInt(), 0xFF141414.toInt(), 0xFF141414.toInt(), false),
 )
 
 // ── Шрифты (системные: ноль байт к APK) ─────────────────────────────────────
 
 class FontChoice(
-    val name: String, val family: String, val style: Int, val caps: Boolean, val spacing: Float,
+    val name: Int, val family: String, val style: Int, val caps: Boolean, val spacing: Float,
     val res: Int = 0, // встроенный TTF (res/font, урезан до латиницы+кириллицы, один вес)
 )
 
@@ -116,23 +116,23 @@ object Fonts {
 }
 
 val FONTS = listOf(
-    FontChoice("Обычный", "sans-serif-medium", Typeface.NORMAL, false, 0f),
-    FontChoice("Жирный", "sans-serif-black", Typeface.NORMAL, false, 0f),
-    FontChoice("Узкий", "sans-serif-condensed", Typeface.BOLD, false, 0f),
-    FontChoice("Капсом", "sans-serif-light", Typeface.NORMAL, true, 0.22f),
-    FontChoice("С засечками", "serif", Typeface.BOLD, false, 0f),
-    FontChoice("Моно", "monospace", Typeface.BOLD, false, 0f),
-    FontChoice("От руки", "casual", Typeface.NORMAL, false, 0f),
+    FontChoice(R.string.f_regular, "sans-serif-medium", Typeface.NORMAL, false, 0f),
+    FontChoice(R.string.f_bold, "sans-serif-black", Typeface.NORMAL, false, 0f),
+    FontChoice(R.string.f_narrow, "sans-serif-condensed", Typeface.BOLD, false, 0f),
+    FontChoice(R.string.f_caps, "sans-serif-light", Typeface.NORMAL, true, 0.22f),
+    FontChoice(R.string.f_serif, "serif", Typeface.BOLD, false, 0f),
+    FontChoice(R.string.f_mono, "monospace", Typeface.BOLD, false, 0f),
+    FontChoice(R.string.f_hand, "casual", Typeface.NORMAL, false, 0f),
     // Встроенные (≈50 КБ каждый): мягкие, с кириллицей.
-    FontChoice("Nunito", "sans-serif-medium", Typeface.NORMAL, false, 0.01f, R.font.nunito),
-    FontChoice("Comfortaa", "sans-serif-medium", Typeface.NORMAL, false, 0f, R.font.comfortaa),
-    FontChoice("Rubik", "sans-serif-medium", Typeface.NORMAL, false, 0f, R.font.rubik),
-    FontChoice("Unbounded", "sans-serif-black", Typeface.NORMAL, false, 0f, R.font.unbounded),
-    FontChoice("Comfortaa капсом", "sans-serif-light", Typeface.NORMAL, true, 0.18f, R.font.comfortaa),
+    FontChoice(R.string.f_nunito, "sans-serif-medium", Typeface.NORMAL, false, 0.01f, R.font.nunito),
+    FontChoice(R.string.f_comfortaa, "sans-serif-medium", Typeface.NORMAL, false, 0f, R.font.comfortaa),
+    FontChoice(R.string.f_rubik, "sans-serif-medium", Typeface.NORMAL, false, 0f, R.font.rubik),
+    FontChoice(R.string.f_unbounded, "sans-serif-black", Typeface.NORMAL, false, 0f, R.font.unbounded),
+    FontChoice(R.string.f_comfortaa_caps, "sans-serif-light", Typeface.NORMAL, true, 0.18f, R.font.comfortaa),
 )
 
-val PALETTE_NAMES = listOf("Календаря", "Мягкие", "Оттенки", "Монохром")
-val ARROW_NAMES = listOf("Тёплая", "Цветом", "Белая")
+val PALETTE_NAMES = listOf(R.string.pal_calendar, R.string.pal_soft, R.string.pal_shades, R.string.pal_mono)
+val ARROW_NAMES = listOf(R.string.arrow_warm, R.string.arrow_accent, R.string.arrow_white)
 
 /** Мультяшная палитра: цвет календаря заменяется ближайшим по оттенку. */
 private val SOFT_PALETTE = intArrayOf(
@@ -141,13 +141,13 @@ private val SOFT_PALETTE = intArrayOf(
 )
 
 val SWATCHES = listOf(
-    0xFFC2357F.toInt() to "Орхидея",
-    0xFFB8295F.toInt() to "Малина-слива",
-    0xFFA8287A.toInt() to "Фуксия",
-    0xFF962A8C.toInt() to "Слива",
-    0xFF7E2E9C.toInt() to "Пурпур",
-    0xFFD4A853.toInt() to "Золото",
-    0xFFFFFFFF.toInt() to "Белый",
+    0xFFC2357F.toInt() to "Orchid",
+    0xFFB8295F.toInt() to "Raspberry plum",
+    0xFFA8287A.toInt() to "Fuchsia",
+    0xFF962A8C.toInt() to "Plum",
+    0xFF7E2E9C.toInt() to "Purple",
+    0xFFD4A853.toInt() to "Gold",
+    0xFFFFFFFF.toInt() to "White",
 )
 
 // ── Ручки ────────────────────────────────────────────────────────────────────
@@ -204,28 +204,28 @@ data class Design(
 }
 
 /** Пресеты: id → (название, дизайн). Первый — по умолчанию. */
-val PRESETS: List<Pair<String, Design>> = listOf(
-    "Сумерки" to Design(),
-    "Мульт" to Design(
+val PRESETS: List<Pair<Int, Design>> = listOf(
+    R.string.p_dusk to Design(),
+    R.string.p_cartoon to Design(
         preset = "cartoon", glow = 0.55f, grain = 0.22f, volume = 0.6f, stars = true, font = 7,
     ),
-    "Бумага" to Design(
+    R.string.bd_paper to Design(
         preset = "paper", hole = 0.22f, grad = 0f, holeLine = false, tint = 0.10f,
         backdrop = 4, glow = 0f, grain = 0.25f, volume = 0f, rays = true, font = 11, palette = 2, arrow = 1,
     ),
-    "Слива" to Design(
+    R.string.bd_plum to Design(
         preset = "plum", accent = 0xFFB8295F.toInt(), hole = 0.42f, grad = 0f, tint = 0.9f,
         backdrop = 1, glow = 0.8f, grain = 0.3f, volume = 0.3f, palette = 2, arrow = 2,
     ),
-    "Тушь" to Design(
+    R.string.p_ink to Design(
         preset = "mono", accent = WHITE, hole = 0.3f, grad = 0.15f, tint = 0.07f, backdrop = 3,
         glow = 0f, grain = 0.12f, volume = 0f, font = 10, palette = 3, arrow = 2, outline = 1f,
     ),
-    "Мел" to Design(
+    R.string.bd_chalk to Design(
         preset = "monoLight", accent = 0xFF141414.toInt(), hole = 0.3f, grad = 0.15f, tint = 0.05f,
         backdrop = 5, glow = 0f, grain = 0.12f, volume = 0f, font = 10, palette = 3, arrow = 1, outline = 1f,
     ),
-    "Классика" to Design(
+    R.string.p_classic to Design(
         preset = "classic", accent = 0xFFD4A853.toInt(), ring = false, hole = 0f, grad = 1f, holeLine = false,
         tint = 0.06f, pastDim = 0.5f, backdrop = 2, glow = 0f, volume = 0f, palette = 0, arrow = 1,
         roundEvents = false,

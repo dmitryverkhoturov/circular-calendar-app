@@ -113,40 +113,40 @@ class WidgetConfigActivity : Activity() {
         fun space(h: Float) = options.addView(View(this), LinearLayout.LayoutParams(1, dp(h)))
 
         options.addView(TextView(this).apply {
-            text = if (cfg.zoom < 0) "Свой кадр · двигай и зумь превью пальцами" else "Превью можно двигать и зумить пальцами"
+            text = if (cfg.zoom < 0) getString(R.string.w_custom_frame) else getString(R.string.w_preview_hint)
             textSize = 12f
             gravity = Gravity.CENTER
             setTextColor(withAlpha(fg(), 0.5f))
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         space(10f)
-        options.addView(label("Масштаб")); space(6f)
-        toggleGrid(WIDGET_ZOOMS.map { it.first }, cfg.zoom, 4) { set(cfg.copy(zoom = it)) }
+        options.addView(label(getString(R.string.w_scale))); space(6f)
+        toggleGrid(WIDGET_ZOOMS.map { getString(it.first) }, cfg.zoom, 4) { set(cfg.copy(zoom = it)) }
         space(10f)
-        options.addView(label("Форма — клин по целым")); space(6f)
-        toggleGrid(WIDGET_CUTS, cfg.cut, 4) { set(cfg.copy(cut = it)) }
+        options.addView(label(getString(R.string.w_shape))); space(6f)
+        toggleGrid(WIDGET_CUTS.map(::getString), cfg.cut, 4) { set(cfg.copy(cut = it)) }
         space(10f)
-        options.addView(label("Положение")); space(6f)
-        toggleGrid(WIDGET_POS, cfg.pos, 3) { set(cfg.copy(pos = it)) }
+        options.addView(label(getString(R.string.w_position))); space(6f)
+        toggleGrid(WIDGET_POS.map(::getString), cfg.pos, 3) { set(cfg.copy(pos = it)) }
         space(10f)
-        options.addView(label("Что движется со временем")); space(6f)
-        toggleGrid(listOf("Круг (сейчас внизу)", "Стрелка"), if (cfg.arrowMoves) 1 else 0, 2) {
+        options.addView(label(getString(R.string.what_moves))); space(6f)
+        toggleGrid(listOf(getString(R.string.w_wheel_now), getString(R.string.hand)), if (cfg.arrowMoves) 1 else 0, 2) {
             set(cfg.copy(arrowMoves = it == 1))
         }
         space(10f)
-        options.addView(label("Тема")); space(6f)
-        toggleGrid(listOf("Как в приложении") + PRESETS.map { it.first }, cfg.theme + 1, 3) {
+        options.addView(label(getString(R.string.w_theme))); space(6f)
+        toggleGrid(listOf(getString(R.string.w_as_app)) + PRESETS.map { getString(it.first) }, cfg.theme + 1, 3) {
             set(cfg.copy(theme = it - 1))
         }
         space(10f)
-        options.addView(label("Фон")); space(6f)
-        toggleGrid(listOf("Без фона", "Фон темы"), if (cfg.background) 1 else 0, 2) {
+        options.addView(label(getString(R.string.background))); space(6f)
+        toggleGrid(listOf(getString(R.string.w_no_bg), getString(R.string.w_theme_bg)), if (cfg.background) 1 else 0, 2) {
             set(cfg.copy(background = it == 1))
         }
         space(16f)
 
         val acc = look().accent
         options.addView(TextView(this).apply {
-            text = "Готово"
+            text = getString(R.string.w_done)
             textSize = 15f
             gravity = Gravity.CENTER
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)

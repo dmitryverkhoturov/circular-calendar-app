@@ -1113,13 +1113,13 @@ class WheelView(context: Context) : View(context) {
         val fps = if (n > 0) 1e9 * n / sum else 0.0
         val lines = arrayOf(
             "fps %.0f".format(fps),
-            "рывков >33мс: $jank",
-            "кадров с грубой подменой: $fbFrames",
-            "кадров с дырой: $holeFrames, оживлено: ${tiles.revivedTotal}",
-            "худший кадр: %.0f мс".format(worst / 1e6),
-            "onDraw: %.1f мс".format(drawCostNs / 1e6),
-            "плитка (фон): %.0f мс".format(tiles.lastJobMs),
-            "плиток: %d, в работе %d".format(tiles.cachedCount, tiles.pendingCount),
+            "jank >33ms: $jank",
+            "fallback frames: $fbFrames",
+            "hole frames: $holeFrames, revived: ${tiles.revivedTotal}",
+            "worst frame: %.0f ms".format(worst / 1e6),
+            "onDraw: %.1f ms".format(drawCostNs / 1e6),
+            "tile (bg): %.0f ms".format(tiles.lastJobMs),
+            "tiles: %d, pending %d".format(tiles.cachedCount, tiles.pendingCount),
         )
         val d = resources.displayMetrics.density
         val lh = hudPaint.textSize * 1.25f

@@ -33,18 +33,13 @@ import kotlin.math.sqrt
 // радиусов. Иначе на масштабе минут/секунд всё дрожало бы на пиксели.
 // ─────────────────────────────────────────────────────────────────────────────
 
-private val MONTHS_RU = arrayOf(
-    "Янв", "Фев", "Мар", "Апр", "Май", "Июн",
-    "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек",
-)
-private val MONTHS_FULL = arrayOf(
-    "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
-    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
-)
-private val MONTHS_GEN = arrayOf(
-    "янв", "фев", "мар", "апр", "мая", "июн",
-    "июл", "авг", "сен", "окт", "ноя", "дек",
-)
+/** Названия месяцев на языке системы («Январь» / "January"). */
+private fun monthsFull(): List<String> {
+    val loc = java.util.Locale.getDefault()
+    return java.time.Month.values().map { m ->
+        m.getDisplayName(java.time.format.TextStyle.FULL_STANDALONE, loc).replaceFirstChar { it.titlecase(loc) }
+    }
+}
 
 private fun deg(rad: Double): Float = (rad * 180.0 / PI).toFloat()
 
@@ -495,7 +490,7 @@ fun drawWheel(
 
     // ── Подписи месяцев — по дуге, всегда читаемые ──────────────────────────
     val midR = if (ds.ring) max((outerR + g.innerR) / 2, holeR + 26 * unit) else (outerR + g.innerR) / 2
-    val monthNames = if (lk.font.caps) MONTHS_FULL.map { it.uppercase() } else MONTHS_FULL.toList()
+    val monthNames = monthsFull().let { ms -> if (lk.font.caps) ms.map { it.uppercase() } else ms }
     val monthSize = (if (lk.font.caps) 11.0 else 13.5) * unit
     for (m in 1..12) {
         val f0 = monthFrac(m)
