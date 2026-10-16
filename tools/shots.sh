@@ -24,9 +24,9 @@ PRESETS="${PRESETS:-0:dusk 1:cartoon 2:paper 3:plum 4:ink 5:chalk 6:classic}"
 # (rf -N = label row N: 1 day, 2 hours, 3 minutes, 4 seconds), secs = date offset from now.
 # "orbits" turns orbits on.
 # The circle is always centred horizontally; R ≈ 480 px at zoom 1 on a 1080x2400 screen.
-VIEWS="${VIEWS:-full:1.08:0:0.5:0.5 rise:2.6:0:0.5:0.85 month:7:0:0.5:1.7 side:2.4:-1.5708:1.25:0.5 diag:3.5:0.42:0.0:1.0 close:8:-0.32:1.6:2.0 days:22:1.476:::0.967::475200 near:75:1.5626:::0.98028::41000}"
-# "near": turned 90°, ~4 days with the demo's short events (yesterday..+2 days); secs is an
-# offset from the time of the run (41000 s fits a run at ~18:30) — adjust at another hour.
+VIEWS="${VIEWS:-full:1.08:0:0.5:0.5 rise:2.6:0:0.5:0.85 month:7:0:0.5:1.7 side:2.4:-1.5708:1.25:0.5 diag:3.5:0.42:0.0:1.0 close:8:-0.32:1.6:2.0 days:22:1.476:::0.967::475200 near:52:1.5626:::0.978::n1}"
+# "near": turned 90°, ~5 whole days (today-1..+3) with the demo short events, centred on tomorrow noon.
+
 # Rotation sequence, Dusk only: the same view turned step by step.
 ROT="rot0:1.25:0:0.5:0.55 rot1:1.25:0.5:0.5:0.55 rot2:1.25:1.0:0.5:0.55"
 for p in $PRESETS; do
@@ -36,6 +36,11 @@ for p in $PRESETS; do
   for v in $V; do
     IFS=: read -r vn z th cx cy rf ex secs <<< "$v"
     [ "$ex" = orbits ] && { $A shell am start -n $P --ez orbits true >/dev/null; sleep 2; }
+    # secs "nN" = noon of day N from today on the device clock (the frame does not depend on the hour).
+    if [ "${secs#n}" != "$secs" ]; then
+      hms=$($A shell date +%H:%M:%S | tr -d ''); IFS=: read -r hh mm ss <<< "$hms"
+      secs=$(( ${secs#n} * 86400 + 43200 - (10#$hh * 3600 + 10#$mm * 60 + 10#$ss) ))
+    fi
     if [ -n "$cx" ]; then
       $A shell am start -n $P --ef zoom "$z" --ef secs 0 --ef rf 0 --ef th "$th" --ef cx "$cx" --ef cy "$cy" >/dev/null
     else

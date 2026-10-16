@@ -326,22 +326,77 @@ fun buildMockEvents(@Suppress("UNUSED_PARAMETER") year: Int): List<CalendarEvent
         ev("Pottery class", "Курс керамики", 2, 2, 3, 30, teal, "hobby"),
         day("My birthday", "Мой день рождения", 2, 21, purple, "family"),
         ev("Trip to Japan", "Поездка в Японию", 3, 20, 4, 2, orange, "travel"),
-    ) + shortMock(purple, red, green)
+        ev("Weekend in Prague", "Выходные в Праге", 10, 2, 10, 4, orange, "travel"),
+        ev("Book fair", "Книжная ярмарка", 10, 9, 10, 11, teal, "hobby"),
+        day("Halloween party", "Вечеринка на Хэллоуин", 10, 31, purple, "family"),
+        ev("Painting the kitchen", "Красим кухню", 11, 20, 11, 22, red, "home"),
+        day("Parents' anniversary", "Годовщина родителей", 12, 5, purple, "family"),
+        ev("Ice skating season", "Сезон катка", 12, 1, 2, 28, green, "sport"),
+        ev("Ski trip", "Поездка на лыжах", 2, 12, 2, 16, orange, "travel"),
+        ev("Spring cleaning", "Весенняя уборка", 3, 7, 3, 8, red, "home"),
+        ev("Garden season", "Сезон на даче", 5, 1, 9, 30, green, "home"),
+        ev("Kids' summer camp", "Летний лагерь детей", 7, 27, 8, 7, purple, "family"),
+        day("Dad's birthday", "День рождения папы", 9, 6, purple, "family"),
+        ev("Language course", "Курс испанского", 9, 7, 12, 18, teal, "hobby"),
+    ) + shortMock(purple, red, green, teal, orange, blue)
 }
 
-/** Короткие (< дня) события вокруг «сегодня» — чтобы мок показывал и их. */
-private fun shortMock(vararg c: Int): List<CalendarEvent> {
+/**
+ * Короткие (< дня) события: плотно вокруг «сегодня» (±10 дней — крупные кадры
+ * по дням) плюс еженедельные дела на всё окно ±6 мес. Длительности 3–8 ч:
+ * на крупном зуме подписи читаются.
+ */
+private fun shortMock(fam: Int, home: Int, sport: Int, hobby: Int, travel: Int, work: Int): List<CalendarEvent> {
     val t = LocalDateTime.now().toLocalDate().atStartOfDay()
-    fun at(day: Long, h: Int, m: Int) = t.plusDays(day).withHour(h).withMinute(m)
-    return listOf(
-        CalendarEvent("s1", tr("Coffee with Kate", "Кофе с Катей"), at(0, 10, 0), at(0, 11, 0), c[0], "family"),
-        CalendarEvent("s2", tr("Lunch with Max", "Обед с Максом"), at(0, 13, 0), at(0, 14, 0), c[0], "family"),
-        CalendarEvent("s3", tr("Dentist", "Стоматолог"), at(1, 9, 30), at(1, 10, 15), c[1], "home"),
-        CalendarEvent("s4", tr("Gym", "Спортзал"), at(1, 18, 0), at(1, 19, 30), c[2], "sport"),
-        CalendarEvent("s5", tr("Haircut", "Стрижка"), at(2, 12, 0), at(2, 12, 45), c[1], "home"),
-        CalendarEvent("s6", tr("Call mom", "Позвонить маме"), at(2, 20, 0), at(2, 20, 15), c[0], "family"),
-        CalendarEvent("s7", tr("Yoga", "Йога"), at(-1, 8, 0), at(-1, 9, 0), c[2], "sport"),
+    var n = 0
+    fun e(day: Long, h: Int, m: Int, mins: Long, en: String, ru: String, col: Int, cal: String): CalendarEvent {
+        val s = t.plusDays(day).withHour(h).withMinute(m)
+        return CalendarEvent("s${n++}", tr(en, ru), s, s.plusMinutes(mins), col, cal)
+    }
+    val near = listOf(
+        e(-9, 10, 0, 240, "Lunch with Max", "Обед с Максом", fam, "family"),
+        e(-8, 17, 0, 240, "Swimming", "Бассейн", sport, "sport"),
+        e(-7, 9, 0, 240, "Groceries", "Продукты", home, "home"),
+        e(-6, 18, 0, 270, "Theatre", "Театр", fam, "family"),
+        e(-5, 10, 0, 300, "Museum", "Музей", hobby, "hobby"),
+        e(-4, 17, 0, 240, "Gym", "Спортзал", sport, "sport"),
+        e(-3, 11, 0, 240, "Flea market", "Блошиный рынок", home, "home"),
+        e(-2, 7, 0, 150, "Yoga", "Йога", sport, "sport"),
+        e(-2, 11, 0, 210, "Book club", "Книжный клуб", hobby, "hobby"),
+        e(-1, 9, 0, 180, "Coffee with Kate", "Кофе с Катей", fam, "family"),
+        e(-1, 14, 0, 240, "Lunch with Ann", "Обед с Аней", fam, "family"),
+        e(0, 9, 0, 210, "Piano lesson", "Урок фортепиано", hobby, "hobby"),
+        e(0, 14, 0, 210, "Lunch with Max", "Обед с Максом", fam, "family"),
+        e(0, 18, 30, 270, "Dinner with friends", "Ужин с друзьями", fam, "family"),
+        e(1, 8, 30, 210, "Dentist", "Стоматолог", home, "home"),
+        e(1, 13, 0, 240, "Bike ride", "Велопрогулка", sport, "sport"),
+        e(1, 18, 30, 270, "Movie night", "Кино вечером", fam, "family"),
+        e(2, 9, 0, 210, "Farmers market", "Фермерский рынок", home, "home"),
+        e(2, 13, 30, 240, "Brunch with Sara", "Бранч с Сашей", fam, "family"),
+        e(2, 18, 30, 270, "Board games", "Настолки", hobby, "hobby"),
+        e(3, 9, 0, 180, "Car service", "Сервис машины", home, "home"),
+        e(3, 15, 0, 240, "Kids' football", "Футбол у детей", fam, "family"),
+        e(4, 9, 0, 240, "Doctor", "Врач", home, "home"),
+        e(4, 18, 0, 270, "Concert", "Концерт", fam, "family"),
+        e(5, 10, 0, 300, "Pottery", "Керамика", hobby, "hobby"),
+        e(6, 11, 0, 300, "Picnic", "Пикник", fam, "family"),
+        e(7, 17, 0, 240, "Swimming", "Бассейн", sport, "sport"),
+        e(8, 9, 0, 240, "Job interview", "Собеседование", work, "work"),
+        e(9, 15, 0, 240, "Parents' evening", "Родительское собрание", fam, "family"),
+        e(10, 9, 0, 480, "Hike", "Поход в горы", travel, "travel"),
     )
+    // Еженедельное на всё окно, кроме дней, расписанных выше.
+    val weekly = ArrayList<CalendarEvent>()
+    for (d in -183L..183L) {
+        if (d in -10L..10L) continue
+        when (t.plusDays(d).dayOfWeek.value) {
+            2, 4 -> weekly.add(e(d, 17, 0, 240, "Gym", "Спортзал", sport, "sport"))
+            3 -> weekly.add(e(d, 18, 0, 240, "Spanish", "Испанский", hobby, "hobby"))
+            6 -> weekly.add(e(d, 10, 0, 300, "Guitar", "Гитара", hobby, "hobby"))
+            7 -> weekly.add(e(d, 12, 0, 360, "Family lunch", "Обед с семьёй", fam, "family"))
+        }
+    }
+    return near + weekly
 }
 
 /**

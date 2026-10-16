@@ -246,7 +246,7 @@ fun drawWheel(
     /** Подпись (прямая) по касательной с ЭКРАННЫМ кеглем [sizePx]. */
     fun label(
         text: String, a: Double, r: Double, sizePx: Float, color: Int,
-        digits: Boolean = false, cv: Canvas = canvas,
+        digits: Boolean = false, cv: Canvas = canvas, fitW: Float = 0f,
     ) {
         val canvas = cv
         if (sizePx < 2.5f) return
@@ -266,7 +266,8 @@ fun drawWheel(
             // ужимаются, если не влезают в ряд по высоте.
             rot = if (cos(a + rotRad) >= 0) a else a + PI
             val w = textPaint.measureText(text) / sizePx
-            if (w > digitH) textPaint.textSize = (sizePx * digitH / w).toFloat()
+            val maxW = if (fitW > 0f) (fitW / sizePx).toDouble() else digitH
+            if (w > maxW) textPaint.textSize = (sizePx * maxW / w).toFloat()
         }
         canvas.rotate(deg(rot))
         canvas.scale(1f / sF, 1f / sF)
@@ -476,6 +477,16 @@ fun drawWheel(
         // Ширина двух цифр в долях кегля: у широких шрифтов (Unbounded) «00»
         // шире своего дня — тогда кегль ужимается, чтобы числа не слипались.
         val wf = textPaint.run { typeface = face; textSize = 100f; letterSpacing = 0f; measureText("00") / 100.0 }
+        // Круг повёрнут ~90° (дуга на экране вертикальна): число дня лежит поперёк
+        // ряда и в высоту ряда помещается мелким. Тогда оно занимает всю полосу
+        // от обода до событий (зазор 0.25 высоты цифры с каждой стороны), а
+        // подписи часов/минут под ним не рисуются.
+        val gapD = 0.25 * digitH * fonts[0]
+        val dayIn = eventBaseR(outerR, totalSec, digitH) + gapD
+        val dayOut = outerR - gapD
+        val dayArc = 2 * PI * (dayIn + dayOut) / 2 * steps[0] / totalSec
+        val bigSize = min(0.45 * dayArc / digitH, (dayOut - dayIn) / wf)
+        fun sideways(a: Double) = abs(cos(a + rotRad)) > abs(sin(a + rotRad))
         for (i in 0..3) {
             val f = min(fonts[i], 0.8 * 2 * PI * rows[i] * steps[i] / totalSec / wf)
             val vis = tv(TIER_LABEL0 + i)
@@ -496,7 +507,20 @@ fun drawWheel(
                 else "%02d".format(Math.floorMod(k, if (i == 1) 24L else 60L))
                 val fmid = (kc + 0.5) * step / totalSec
                 val c = if (fmid <= nowFrac) lk.dayNumPast else lk.dayNumFuture
-                label(text, tm.angleOf(fmid), rc, (f * s).toFloat(), mulAlpha(c, vis), digits = true, cv = cv)
+                val am = tm.angleOf(fmid)
+                if (sideways(am) && bigSize > f) {
+                    if (i == 0) {
+                        label(text, am, (dayIn + dayOut) / 2, (bigSize * s).toFloat(), mulAlpha(c, vis),
+                            digits = true, cv = cv, fitW = ((dayOut - dayIn) * s).toFloat())
+                        continue
+                    }
+                    // Мелкие подписи в полосе большого числа своего дня — не рисуем.
+                    val dk = floor(fmid * totalSec / steps[0])
+                    val noon = (dk + 0.5) * steps[0] / totalSec
+                    val half = 0.5 * digitH * bigSize / (2 * PI * rc) + 0.5 * f / (2 * PI * rc)
+                    if (abs(fmid - noon) < half * 1.3) continue
+                }
+                label(text, am, rc, (f * s).toFloat(), mulAlpha(c, vis), digits = true, cv = cv)
             }
         }
     }
