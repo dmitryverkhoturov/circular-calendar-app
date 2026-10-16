@@ -20,19 +20,7 @@ Your events from the phone's calendar are drawn on the ring.
 - **Tiny and fast** — about 0.5 MB, no third-party libraries, made for 90–120 Hz screens.
 - **13 languages.**
 
-## Themes
-
-![Themes](docs/images/themes.png)
-
-## Rotate
-
-![Turn it with two fingers](docs/images/rotate.png)
-
 ![Any angle](docs/images/angles.png)
-
-## Zoom
-
-![Zoom from a year to a day](docs/images/zoom.png)
 
 ## Install
 

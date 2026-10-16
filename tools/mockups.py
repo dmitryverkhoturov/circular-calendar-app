@@ -89,23 +89,26 @@ def hero():
     return img.convert("RGB")
 
 
-def grid(items, cols, title, w=420):
+def grid(items, cols, title=None, w=420):
     cells = [(phone(shot(t, v), w), label) for t, v, label in items]
     (p0, pad), _ = cells[0]
     cw, ch = p0.width - pad, p0.height - pad
     rows = (len(cells) + cols - 1) // cols
-    top = 170
+    top = 170 if title else 90
     W = cols * cw + pad
-    H = top + rows * (ch + 90) + 20
+    H = top + rows * (ch + (90 if title else 30)) + 20
     img = gradient((W, H), (245, 241, 234), (228, 222, 210))
-    text_center(img, 50, title, font("unbounded.ttf", 64), (40, 24, 50))
+    if title:
+        text_center(img, 50, title, font("unbounded.ttf", 64), (40, 24, 50))
     lf = font("nunito.ttf", 44)
     for i, ((p, pad), label) in enumerate(cells):
         r, c = divmod(i, cols)
         n = min(cols, len(cells) - r * cols)
         x0 = (W - n * cw - pad) // 2
-        x, y = x0 + c * cw, top + r * (ch + 90)
+        x, y = x0 + c * cw, top + r * (ch + (90 if title else 30))
         img.alpha_composite(p, (x, y - pad // 2))
+        if not label:
+            continue
         d = ImageDraw.Draw(img)
         tw = d.textlength(label, font=lf)
         d.text((x + pad + (cw - pad - tw) / 2, y + ch - pad // 2 + 25), label, font=lf, fill=(60, 44, 70))
@@ -139,11 +142,8 @@ def rotate_strip():
 def main():
     os.makedirs(os.path.join(OUT, "screens"), exist_ok=True)
     hero().save(os.path.join(OUT, "hero.png"), optimize=True)
-    rotate_strip().save(os.path.join(OUT, "rotate.png"), optimize=True)
-    grid([("plum", "side", "Side"), ("paper", "diag", "Diagonal"), ("cartoon", "close", "Close-up"),
-          ("dusk", "days", "Days, turned 90°")], 4, "Any angle").save(os.path.join(OUT, "angles.png"), optimize=True)
-    grid([(t, "rise", n) for t, n in THEMES], 4, "Themes").save(os.path.join(OUT, "themes.png"), optimize=True)
-    grid([("dusk", v, n) for v, n in VIEWS], 4, "Zoom from a year to a day").save(os.path.join(OUT, "zoom.png"), optimize=True)
+    grid([("plum", "side", ""), ("paper", "diag", ""), ("cartoon", "close", ""),
+          ("chalk", "days", "")], 4).save(os.path.join(OUT, "angles.png"), optimize=True)
     for f in sorted(os.listdir(SHOTS)):
         if f.endswith(".png"):
             im = Image.open(os.path.join(SHOTS, f)).convert("RGB")

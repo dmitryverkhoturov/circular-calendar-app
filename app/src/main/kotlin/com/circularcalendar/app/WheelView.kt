@@ -437,7 +437,7 @@ class WheelView(context: Context) : View(context) {
         // cx/cy: центр круга в долях экрана — для выверенных ракурсов скриншотов.
         if (!cx.isNaN()) camOx = width * cx
         if (!cy.isNaN()) camOy = height * cy
-        invalidate()
+        requestCrisp() // как в конце жеста: подписи переписываются под новый поворот
     }
 
     /**

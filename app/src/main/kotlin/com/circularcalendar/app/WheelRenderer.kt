@@ -258,10 +258,20 @@ fun drawWheel(
         textPaint.letterSpacing = 0f
         canvas.save()
         canvas.translate(px(a, r), py(a, r))
-        canvas.rotate(deg(textRot(a)))
+        var rot = textRot(a)
+        if (digits && abs(cos(a + rotRad)) > abs(sin(a + rotRad))) {
+            // Дуга на экране ближе к вертикали (круг повёрнут ~90°): цифры
+            // поворачиваются ровно на четверть оборота от дуги (не к горизонту —
+            // остаются привязаны к кругу), в ту сторону, где не вверх ногами;
+            // ужимаются, если не влезают в ряд по высоте.
+            rot = if (cos(a + rotRad) >= 0) a else a + PI
+            val w = textPaint.measureText(text) / sizePx
+            if (w > digitH) textPaint.textSize = (sizePx * digitH / w).toFloat()
+        }
+        canvas.rotate(deg(rot))
         canvas.scale(1f / sF, 1f / sF)
         // Цифры центрируются по их реальной высоте (ряды встают точно).
-        val y = if (digits) (digitH * sizePx / 2).toFloat()
+        val y = if (digits) (digitH * textPaint.textSize / 2).toFloat()
         else -(textPaint.ascent() + textPaint.descent()) / 2f
         canvas.drawText(text, 0f, y, textPaint)
         canvas.restore()
@@ -463,8 +473,11 @@ fun drawWheel(
         val steps = TIME_STEPS
         val fonts = timeLabelFonts(outerR, totalSec)
         val rows = timeLabelRows(outerR, totalSec, digitH)
+        // Ширина двух цифр в долях кегля: у широких шрифтов (Unbounded) «00»
+        // шире своего дня — тогда кегль ужимается, чтобы числа не слипались.
+        val wf = textPaint.run { typeface = face; textSize = 100f; letterSpacing = 0f; measureText("00") / 100.0 }
         for (i in 0..3) {
-            val f = fonts[i]
+            val f = min(fonts[i], 0.8 * 2 * PI * rows[i] * steps[i] / totalSec / wf)
             val vis = tv(TIER_LABEL0 + i)
             if (vis <= 0f) continue
             val cv = tc(TIER_LABEL0 + i)
@@ -660,6 +673,7 @@ fun drawWheel(
                 isDayPlus = sweepFrac >= LARGE_BAND_FRAC,
                 ccw = settings.counterClockwise,
                 camScale = s,
+                screenRot = rotRad,
             )
         }
         if (tiny.isNotEmpty()) {
@@ -1093,6 +1107,7 @@ private fun drawBandTitle(
     isDayPlus: Boolean,
     ccw: Boolean,
     camScale: Double,
+    screenRot: Double = 0.0,
 ) {
     val title = band.event.title
     if (title.isBlank()) return
@@ -1144,7 +1159,10 @@ private fun drawBandTitle(
         val dirSign = if (ccw) 1.0 else -1.0
         val dx = -sin(amid) * dirSign
         val dy = cos(amid) * dirSign
-        val rotDeg = (atan2(-dx, dy) * 180.0 / PI).toFloat()
+        var rot = atan2(-dx, dy)
+        // Малые события: переворот на 180°, чтобы на экране не стоять вверх ногами.
+        if (cos(rot + screenRot) < 0) rot += PI
+        val rotDeg = (rot * 180.0 / PI).toFloat()
         canvas.save()
         canvas.translate((cx + cos(amid) * r).toFloat(), (cy + sin(amid) * r).toFloat())
         canvas.rotate(rotDeg)
