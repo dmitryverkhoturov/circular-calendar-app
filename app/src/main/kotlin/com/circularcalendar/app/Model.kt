@@ -296,29 +296,29 @@ fun buildMockEvents(@Suppress("UNUSED_PARAMETER") year: Int): List<CalendarEvent
     fun ev(en: String, ru: String, a: LocalDateTime, b: LocalDateTime, c: Int, cal: String, allDay: Boolean = false) =
         CalendarEvent("m${n++}", tr(en, ru), a, b, c, cal, allDay)
 
+    // Новый год в горах — на ближайшие 29.12–04.01 (всегда в окне ±6 мес вокруг осени/зимы).
+    val nyYear = if (today.monthValue >= 7) today.year else today.year - 1
+    val ny = LocalDateTime.of(nyYear, 12, 29, 0, 0)
+
     return listOf(
-        ev("Spring semester", "Весенний семестр", d(-6, 1), d(-3, 15), green, "edu"),
-        ev("Conference: Berlin", "Конференция: Берлин", d(-5, 10), d(-5, 14), blue, "work"),
-        ev("Mom's birthday", "День рождения мамы", d(-4, 3), d(-4, 4), purple, "personal", true),
-        ev("Hiking trip", "Поход", d(-4, 18), d(-4, 25), teal, "personal"),
-        ev("English course", "Курс английского", d(-3, 1), d(-2, 1), green, "edu"),
-        ev("Team offsite", "Выезд команды", d(-3, 12), d(-3, 15), blue, "work"),
-        ev("Running club", "Беговой клуб", d(-2, 1), d(0, 1), teal, "health"),
-        ev("Vacation: seaside", "Отпуск: море", d(-2, 14), d(-2, 28), orange, "personal"),
-        ev("Product launch", "Запуск продукта", d(-1, 5), d(-1, 9), red, "work"),
-        ev("Sprint 24", "Спринт 24", t(-6), t(8), blue, "work"),
-        ev("Trip to Lisbon", "Поездка в Лиссабон", t(4), t(9), orange, "personal"),
+        ev("English course", "Курс английского", d(-6, 1), d(-5, 1), green, "edu"),
+        ev("Birthday", "День рождения", d(-5, 17), d(-5, 18), purple, "personal", true),
+        ev("Hackathon", "Хакатон", d(-5, 25), d(-5, 28), teal, "work"),
+        ev("Running", "Пробежки", d(-4, 1), d(-1, 1), teal, "health"),
+        ev("Apartment renovation", "Ремонт квартиры", d(-4, 15), d(-3, 10), red, "personal"),
+        ev("Diet", "Диета", d(-3, 15), d(-2, 15), orange, "health"),
+        ev("Team offsite", "Встреча команды", d(-3, 24), d(-3, 27), blue, "work"),
+        ev("Vacation: seaside", "Отпуск: море", d(-2, 14), d(-2, 28), teal, "personal"),
+        ev("Friend's birthday", "День рождения друга", d(-1, 3), d(-1, 4), green, "personal", true),
+        ev("Course: module 2", "Учёба: модуль 2", t(-10), t(12), orange, "edu"),
+        ev("Business trip", "Командировка", t(4), t(9), blue, "work"),
         ev("Project deadline", "Дедлайн проекта", t(14), t(15), red, "work", true),
-        ev("UX course: module 2", "UX-курс: модуль 2", d(1, 1), d(2, 1), green, "edu"),
-        ev("Friend's birthday", "День рождения друга", d(1, 11), d(1, 12), purple, "personal", true),
-        ev("Hackathon", "Хакатон", d(1, 20), d(1, 23), teal, "work"),
-        ev("Car inspection", "Техосмотр", d(2, 5), d(2, 7), orange, "personal"),
-        ev("Holidays in the mountains", "Каникулы в горах", d(2, 24), d(3, 3), purple, "personal"),
-        ev("Ski trip", "Горнолыжка", d(3, 10), d(3, 18), teal, "personal"),
-        ev("Training plan", "План тренировок", d(4, 1), d(5, 1), orange, "health"),
-        ev("Anniversary", "Годовщина", d(4, 14), d(4, 15), purple, "personal", true),
-        ev("Business trip: Tokyo", "Командировка: Токио", d(5, 2), d(5, 9), blue, "work"),
-        ev("Tax return deadline", "Срок налоговой декларации", d(5, 20), d(5, 21), red, "personal", true),
+        ev("Car inspection", "Техосмотр", d(1, 5), d(1, 7), orange, "personal"),
+        ev("Project Alpha", "Проект Alpha", d(1, 10), d(1, 28), blue, "work"),
+        ev("Conference", "Конференция", d(1, 18), d(1, 22), green, "work"),
+        ev("New Year in the mountains", "Новый год в горах", ny, ny.plusDays(6), purple, "personal"),
+        ev("Mom's birthday", "День рождения мамы", d(4, 14), d(4, 15), purple, "personal", true),
+        ev("Vacation: hiking", "Отпуск: поход", d(5, 2), d(5, 12), teal, "personal"),
     ) + shortMock(blue, green, orange, teal)
 }
 
