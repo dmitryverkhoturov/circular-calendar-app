@@ -424,7 +424,7 @@ class WheelView(context: Context) : View(context) {
      * Отладка (adb): навести камеру на точку круга — [secs] секунд от «сейчас»,
      * на доле радиуса [rf] (1 = внешнее кольцо), зум [zoom], без поворота.
      */
-    fun debugLook(zoom: Double, secs: Double, rf: Double, th: Double = 0.0) {
+    fun debugLook(zoom: Double, secs: Double, rf: Double, th: Double = 0.0, cx: Double = Double.NaN, cy: Double = Double.NaN) {
         stopAll()
         refreshTime()
         val g = geom()
@@ -434,6 +434,9 @@ class WheelView(context: Context) : View(context) {
         camS = zoom; camTh = th
         camOx = width / 2.0 - zoom * cos(a + th) * r
         camOy = height / 2.0 - zoom * sin(a + th) * r
+        // cx/cy: центр круга в долях экрана — для выверенных ракурсов скриншотов.
+        if (!cx.isNaN()) camOx = width * cx
+        if (!cy.isNaN()) camOy = height * cy
         invalidate()
     }
 

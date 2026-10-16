@@ -2,6 +2,7 @@ package com.circularcalendar.app
 
 import java.time.Duration
 import java.time.LocalDateTime
+import kotlin.math.abs
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Модель события / календаря / фильтра / настроек.
@@ -285,41 +286,47 @@ fun buildMockEvents(@Suppress("UNUSED_PARAMETER") year: Int): List<CalendarEvent
     val red = 0xFFE74C3C.toInt()
 
     val today = LocalDateTime.now().toLocalDate().atStartOfDay()
-    val m0 = today.withDayOfMonth(1)
-    // Месяц со сдвигом от текущего, день обрезается по длине месяца.
-    fun d(month: Long, day: Int): LocalDateTime {
-        val m = m0.plusMonths(month)
-        return m.withDayOfMonth(day.coerceIn(1, m.toLocalDate().lengthOfMonth()))
-    }
-    fun t(day: Long) = today.plusDays(day)
+    // Дата в том году, где она ближе всего к сегодня (окно ±6 мес) — сезонные
+    // события остаются в своих месяцах при любой дате запуска.
+    fun on(m: Int, day: Int): LocalDateTime = (-1..1)
+        .map { LocalDateTime.of(today.year + it, m, day, 0, 0) }
+        .minBy { abs(Duration.between(today, it).toDays()) }
     var n = 0
-    fun ev(en: String, ru: String, a: LocalDateTime, b: LocalDateTime, c: Int, cal: String, allDay: Boolean = false) =
-        CalendarEvent("m${n++}", tr(en, ru), a, b, c, cal, allDay)
+    // Событие с [m1/d1] по [m2/d2] включительно; конец в следующем году, если месяц меньше.
+    fun ev(en: String, ru: String, m1: Int, d1: Int, m2: Int, d2: Int, c: Int, cal: String): CalendarEvent {
+        val s = on(m1, d1)
+        var e = LocalDateTime.of(s.year, m2, d2, 0, 0).plusDays(1)
+        if (e.isBefore(s)) e = e.plusYears(1)
+        return CalendarEvent("m${n++}", tr(en, ru), s, e, c, cal)
+    }
+    fun day(en: String, ru: String, m: Int, d: Int, c: Int, cal: String) =
+        on(m, d).let { CalendarEvent("m${n++}", tr(en, ru), it, it.plusDays(1), c, cal, true) }
 
-    // Новый год в горах — на ближайшие 29.12–04.01 (всегда в окне ±6 мес вокруг осени/зимы).
-    val nyYear = if (today.monthValue >= 7) today.year else today.year - 1
-    val ny = LocalDateTime.of(nyYear, 12, 29, 0, 0)
-
+    // Цвета по смыслу: поездки — оранжевый, семья и друзья — фиолетовый, спорт — зелёный,
+    // хобби — бирюзовый, дом — красный, работа — синий.
     return listOf(
-        ev("English course", "Курс английского", d(-6, 1), d(-5, 1), green, "edu"),
-        ev("Birthday", "День рождения", d(-5, 17), d(-5, 18), purple, "personal", true),
-        ev("Hackathon", "Хакатон", d(-5, 25), d(-5, 28), teal, "work"),
-        ev("Running", "Пробежки", d(-4, 1), d(-1, 1), teal, "health"),
-        ev("Apartment renovation", "Ремонт квартиры", d(-4, 15), d(-3, 10), red, "personal"),
-        ev("Diet", "Диета", d(-3, 15), d(-2, 15), orange, "health"),
-        ev("Team offsite", "Встреча команды", d(-3, 24), d(-3, 27), blue, "work"),
-        ev("Vacation: seaside", "Отпуск: море", d(-2, 14), d(-2, 28), teal, "personal"),
-        ev("Friend's birthday", "День рождения друга", d(-1, 3), d(-1, 4), green, "personal", true),
-        ev("Course: module 2", "Учёба: модуль 2", t(-10), t(12), orange, "edu"),
-        ev("Business trip", "Командировка", t(4), t(9), blue, "work"),
-        ev("Project deadline", "Дедлайн проекта", t(14), t(15), red, "work", true),
-        ev("Car inspection", "Техосмотр", d(1, 5), d(1, 7), orange, "personal"),
-        ev("Project Alpha", "Проект Alpha", d(1, 10), d(1, 28), blue, "work"),
-        ev("Conference", "Конференция", d(1, 18), d(1, 22), green, "work"),
-        ev("New Year in the mountains", "Новый год в горах", ny, ny.plusDays(6), purple, "personal"),
-        ev("Mom's birthday", "День рождения мамы", d(4, 14), d(4, 15), purple, "personal", true),
-        ev("Vacation: hiking", "Отпуск: поход", d(5, 2), d(5, 12), teal, "personal"),
-    ) + shortMock(blue, green, orange, teal)
+        ev("Trip to Rome", "Поездка в Рим", 4, 24, 4, 29, orange, "travel"),
+        ev("Guitar lessons", "Уроки гитары", 5, 4, 6, 29, teal, "hobby"),
+        day("Mom's birthday", "День рождения мамы", 5, 17, purple, "family"),
+        ev("Moving to a new flat", "Переезд", 6, 5, 6, 8, red, "home"),
+        day("Anna & Tom's wedding", "Свадьба Ани и Тома", 6, 20, purple, "family"),
+        ev("Seaside vacation", "Отпуск на море", 7, 10, 7, 24, orange, "travel"),
+        ev("Camping", "Поход", 8, 14, 8, 17, green, "sport"),
+        ev("Music festival", "Музыкальный фестиваль", 8, 28, 8, 31, purple, "family"),
+        ev("Marathon training", "Подготовка к марафону", 9, 1, 10, 25, green, "sport"),
+        ev("Conference in Berlin", "Конференция в Берлине", 9, 15, 9, 18, blue, "work"),
+        ev("Grandparents visiting", "Бабушка и дедушка в гостях", 10, 20, 10, 24, purple, "family"),
+        day("City marathon", "Городской марафон", 10, 26, green, "sport"),
+        day("Friend's birthday", "День рождения друга", 11, 8, purple, "family"),
+        ev("Trip to Lisbon", "Поездка в Лиссабон", 11, 12, 11, 16, orange, "travel"),
+        day("Project presentation", "Презентация проекта", 11, 25, blue, "work"),
+        ev("Christmas with family", "Рождество с семьёй", 12, 24, 12, 26, red, "home"),
+        ev("New Year in the mountains", "Новый год в горах", 12, 29, 1, 4, orange, "travel"),
+        ev("Yoga retreat", "Йога-ретрит", 1, 16, 1, 19, green, "sport"),
+        ev("Pottery class", "Курс керамики", 2, 2, 3, 30, teal, "hobby"),
+        day("My birthday", "Мой день рождения", 2, 21, purple, "family"),
+        ev("Trip to Japan", "Поездка в Японию", 3, 20, 4, 2, orange, "travel"),
+    ) + shortMock(purple, red, green)
 }
 
 /** Короткие (< дня) события вокруг «сегодня» — чтобы мок показывал и их. */
@@ -327,13 +334,13 @@ private fun shortMock(vararg c: Int): List<CalendarEvent> {
     val t = LocalDateTime.now().toLocalDate().atStartOfDay()
     fun at(day: Long, h: Int, m: Int) = t.plusDays(day).withHour(h).withMinute(m)
     return listOf(
-        CalendarEvent("s1", tr("Team call", "Созвон с командой"), at(0, 10, 0), at(0, 11, 0), c[0], "work"),
-        CalendarEvent("s2", tr("Lunch", "Обед"), at(0, 13, 0), at(0, 14, 0), c[1], "personal"),
-        CalendarEvent("s3", tr("Dentist", "Стоматолог"), at(1, 9, 30), at(1, 10, 15), c[2], "personal"),
-        CalendarEvent("s4", tr("Workout", "Тренировка"), at(1, 18, 0), at(1, 19, 30), c[3], "health"),
-        CalendarEvent("s5", tr("Review", "Ревью"), at(1, 18, 30), at(1, 19, 0), c[0], "work"),
-        CalendarEvent("s6", tr("Call mom", "Звонок маме"), at(2, 20, 0), at(2, 20, 15), c[1], "personal"),
-        CalendarEvent("s7", tr("Yoga", "Йога"), at(-1, 8, 0), at(-1, 9, 0), c[3], "health"),
+        CalendarEvent("s1", tr("Coffee with Kate", "Кофе с Катей"), at(0, 10, 0), at(0, 11, 0), c[0], "family"),
+        CalendarEvent("s2", tr("Lunch with Max", "Обед с Максом"), at(0, 13, 0), at(0, 14, 0), c[0], "family"),
+        CalendarEvent("s3", tr("Dentist", "Стоматолог"), at(1, 9, 30), at(1, 10, 15), c[1], "home"),
+        CalendarEvent("s4", tr("Gym", "Спортзал"), at(1, 18, 0), at(1, 19, 30), c[2], "sport"),
+        CalendarEvent("s5", tr("Haircut", "Стрижка"), at(2, 12, 0), at(2, 12, 45), c[1], "home"),
+        CalendarEvent("s6", tr("Call mom", "Позвонить маме"), at(2, 20, 0), at(2, 20, 15), c[0], "family"),
+        CalendarEvent("s7", tr("Yoga", "Йога"), at(-1, 8, 0), at(-1, 9, 0), c[2], "sport"),
     )
 }
 

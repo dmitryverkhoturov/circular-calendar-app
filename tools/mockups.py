@@ -14,7 +14,7 @@ FONT = os.path.join(ROOT, "app", "src", "main", "res", "font")
 
 THEMES = [("dusk", "Dusk"), ("cartoon", "Cartoon"), ("paper", "Paper"), ("plum", "Plum"),
           ("ink", "Ink"), ("chalk", "Chalk"), ("classic", "Classic")]
-VIEWS = [("full", "Year"), ("half", "Half a year"), ("month", "Month"), ("week", "Week")]
+VIEWS = [("full", "Year"), ("rise", "Season"), ("month", "Month"), ("days", "Days")]
 
 
 def font(name, size):
@@ -32,7 +32,7 @@ def rounded_mask(size, r):
 
 
 def phone(screen, width):
-    """iPhone-X-style frame: thin dark bezel, rounded corners, notch; with soft shadow."""
+    """Plain phone frame: thin dark bezel, rounded corners, soft shadow. The screenshot is untouched."""
     sw = width
     sh = round(screen.height * sw / screen.width)
     scr = screen.resize((sw, sh), Image.LANCZOS)
@@ -52,11 +52,6 @@ def phone(screen, width):
     d.rounded_rectangle((0, 0, W - 1, H - 1), R, fill=(24, 24, 28, 255))
     d.rounded_rectangle((1, 1, W - 2, H - 2), R - 1, outline=(70, 70, 78, 255), width=max(2, sw // 300))
     body.paste(scr, (bez, bez), rounded_mask((sw, sh), R - bez))
-    nw, nh = round(sw * 0.42), round(sw * 0.075)
-    nx = (W - nw) // 2
-    d = ImageDraw.Draw(body)
-    d.rounded_rectangle((nx, bez - 2, nx + nw, bez + nh), nh // 2, fill=(24, 24, 28, 255))
-    d.rectangle((nx, bez - 2, nx + nw, bez + nh // 2), fill=(24, 24, 28, 255))
     img.alpha_composite(body, (pad, pad))
     return img, pad
 
@@ -81,13 +76,14 @@ def hero():
     text_center(img, 70, "Circular Calendar", font("unbounded.ttf", 96), (246, 240, 255))
     text_center(img, 200, "Your whole year as one circle. Zoom from months to seconds.",
                 font("nunito.ttf", 46), (200, 186, 230))
-    picks = [("paper", "tilt", 380, 7), ("plum", "spin", 430, 3.5), ("dusk", "tilt", 500, 0),
-             ("cartoon", "spin", 430, -3.5), ("chalk", "tilt", 380, -7)]
-    xs = [380, 790, 1200, 1610, 2020]
-    for (t, v, w, deg), cx in zip(picks, xs):
+    # Symmetric: light themes outside, dark inside, Dusk in the centre.
+    picks = [("paper", "days", 380), ("plum", "diag", 430), ("dusk", "rise", 500),
+             ("ink", "side", 430), ("classic", "days", 380)]
+    xs = [400, 790, 1200, 1610, 2000]
+    # Layered: outer phones first, the centre one on top.
+    for k in (0, 4, 1, 3, 2):
+        (t, v, w), cx = picks[k], xs[k]
         p, pad = phone(shot(t, v), w)
-        if deg:
-            p = p.rotate(deg, resample=Image.BICUBIC, expand=True)
         cy = 330 + (500 - w) + round(w * 1.15)
         img.alpha_composite(p, (cx - p.width // 2, cy - p.height // 2))
     return img.convert("RGB")
@@ -100,7 +96,7 @@ def grid(items, cols, title, w=420):
     rows = (len(cells) + cols - 1) // cols
     top = 170
     W = cols * cw + pad
-    H = top + rows * (ch + 60) + 40
+    H = top + rows * (ch + 90) + 20
     img = gradient((W, H), (245, 241, 234), (228, 222, 210))
     text_center(img, 50, title, font("unbounded.ttf", 64), (40, 24, 50))
     lf = font("nunito.ttf", 44)
@@ -108,11 +104,11 @@ def grid(items, cols, title, w=420):
         r, c = divmod(i, cols)
         n = min(cols, len(cells) - r * cols)
         x0 = (W - n * cw - pad) // 2
-        x, y = x0 + c * cw, top + r * (ch + 60)
+        x, y = x0 + c * cw, top + r * (ch + 90)
         img.alpha_composite(p, (x, y - pad // 2))
         d = ImageDraw.Draw(img)
         tw = d.textlength(label, font=lf)
-        d.text((x + pad + (cw - pad - tw) / 2, y + ch - pad // 2 - 10), label, font=lf, fill=(60, 44, 70))
+        d.text((x + pad + (cw - pad - tw) / 2, y + ch - pad // 2 + 25), label, font=lf, fill=(60, 44, 70))
     return img.convert("RGB")
 
 
@@ -144,8 +140,10 @@ def main():
     os.makedirs(os.path.join(OUT, "screens"), exist_ok=True)
     hero().save(os.path.join(OUT, "hero.png"), optimize=True)
     rotate_strip().save(os.path.join(OUT, "rotate.png"), optimize=True)
-    grid([(t, "tilt", n) for t, n in THEMES], 4, "Themes").save(os.path.join(OUT, "themes.png"), optimize=True)
-    grid([("dusk", v, n) for v, n in VIEWS], 4, "From a year to a week").save(os.path.join(OUT, "zoom.png"), optimize=True)
+    grid([("plum", "side", "Side"), ("paper", "diag", "Diagonal"), ("cartoon", "close", "Close-up"),
+          ("dusk", "days", "Days, turned 90°")], 4, "Any angle").save(os.path.join(OUT, "angles.png"), optimize=True)
+    grid([(t, "rise", n) for t, n in THEMES], 4, "Themes").save(os.path.join(OUT, "themes.png"), optimize=True)
+    grid([("dusk", v, n) for v, n in VIEWS], 4, "Zoom from a year to a day").save(os.path.join(OUT, "zoom.png"), optimize=True)
     for f in sorted(os.listdir(SHOTS)):
         if f.endswith(".png"):
             im = Image.open(os.path.join(SHOTS, f)).convert("RGB")

@@ -149,7 +149,24 @@ class MainActivity : Activity() {
         saveSettings()
         wheel.update(settings, events, now)
         styleSettingsButton()
+        styleSystemBars()
         rebuildPanelIfOpen()
+    }
+
+    /** Значки системных баров: тёмные на светлых темах («Бумага», «Мел»), светлые на тёмных. */
+    private fun styleSystemBars() {
+        val light = !settings.look.dark
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            val m = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+            window.insetsController?.setSystemBarsAppearance(if (light) m else 0, m)
+        } else {
+            @Suppress("DEPRECATION")
+            val f = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility =
+                if (light) window.decorView.systemUiVisibility or f else window.decorView.systemUiVisibility and f.inv()
+        }
     }
 
     /** Ползунок дизайна: без пересборки панели (иначе рвётся касание). */
@@ -238,6 +255,7 @@ class MainActivity : Activity() {
         wheel.isSoundEffectsEnabled = false
 
         setContentView(root)
+        styleSystemBars() // после setContentView: до него у окна нет DecorView
 
         // Мок всегда — виден сразу; реальные календари загрузятся асинхронно.
         events = buildMockEvents(now.year)
@@ -263,6 +281,7 @@ class MainActivity : Activity() {
         if (intent.hasExtra("state")) android.util.Log.i("CCDBG", wheel.debugState())
         if (intent.hasExtra("dbg")) { wheel.dbg = intent.getIntExtra("dbg", 0); RDBG = wheel.dbg; wheel.update(settings, events, now) }
         if (intent.hasExtra("preset")) PRESETS.getOrNull(intent.getIntExtra("preset", 0))?.let { applyDesign(it.second) }
+        if (intent.hasExtra("orbits")) applySettings(settings.copy(showOrbits = intent.getBooleanExtra("orbits", false)))
         if (intent.hasExtra("hud")) wheel.perfHud = intent.getBooleanExtra("hud", false)
         // Демо-режим для скриншотов: только мок-пользователь, реальный календарь не подгружается.
         if (intent.getBooleanExtra("demo", false)) {
@@ -283,6 +302,8 @@ class MainActivity : Activity() {
                     intent.getFloatExtra("secs", 0f).toDouble(),
                     intent.getFloatExtra("rf", 1f).toDouble(),
                     intent.getFloatExtra("th", 0f).toDouble(),
+                    if (intent.hasExtra("cx")) intent.getFloatExtra("cx", 0.5f).toDouble() else Double.NaN,
+                    if (intent.hasExtra("cy")) intent.getFloatExtra("cy", 0.5f).toDouble() else Double.NaN,
                 )
             }
         }

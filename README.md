@@ -28,9 +28,11 @@ Your events from the phone's calendar are drawn on the ring.
 
 ![Turn it with two fingers](docs/images/rotate.png)
 
+![Any angle](docs/images/angles.png)
+
 ## Zoom
 
-![From a year to a week](docs/images/zoom.png)
+![Zoom from a year to a day](docs/images/zoom.png)
 
 ## Install
 
