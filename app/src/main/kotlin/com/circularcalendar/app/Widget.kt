@@ -103,11 +103,11 @@ fun appSettings(ctx: Context): WheelSettings {
         } catch (_: Exception) {}
     }
     return WheelSettings(
-        counterClockwise = p.getBoolean("ccw", true),
-        nowAtBottom = p.getBoolean("nowBottom", true),
+        counterClockwise = p.getBoolean("ccw", false),
+        nowAtBottom = p.getBoolean("nowBottom", false),
         design = Design.fromJson(p.getString("design", null)),
         calendarFilter = filter,
-        largeEventsOnTop = p.getBoolean("largeTop", false),
+        largeEventsOnTop = p.getBoolean("largeTop", true),
         keplerOrbit = p.getBoolean("kepler", false),
         showOrbits = false,
         arrowMoves = p.getBoolean("arrowMoves", false),

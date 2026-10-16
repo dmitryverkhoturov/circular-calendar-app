@@ -226,7 +226,7 @@ val PRESETS: List<Pair<Int, Design>> = listOf(
         preset = "cartoon", glow = 0.55f, grain = 0.22f, volume = 0.6f, stars = true, font = 7,
     ),
     R.string.bd_paper to Design(
-        preset = "paper", hole = 0.22f, grad = 0f, holeLine = false, tint = 0.10f,
+        preset = "paper", hole = 0.46f, grad = 0f, holeLine = false, tint = 0.10f,
         backdrop = 4, glow = 0f, grain = 0.25f, volume = 0f, rays = true, font = 11, palette = 2, arrow = 1,
     ),
     R.string.bd_plum to Design(

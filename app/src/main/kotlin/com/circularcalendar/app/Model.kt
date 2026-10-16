@@ -48,14 +48,14 @@ class CalendarFilter(val allowedIds: Set<String>? = null) {
 }
 
 class WheelSettings(
-    val counterClockwise: Boolean = true,
-    val nowAtBottom: Boolean = true,
+    val counterClockwise: Boolean = false,
+    val nowAtBottom: Boolean = false,
     val design: Design = Design(),
     val calendarFilter: CalendarFilter = CalendarFilter(),
     // Крупные события: false = «снизу», у кольца дней (укладка как в v0.4);
     // true = «сверху» — иерархия длительности: из двух пересекающихся
     // более длинное уходит дальше от кольца, короткие остаются у кольца.
-    val largeEventsOnTop: Boolean = false,
+    val largeEventsOnTop: Boolean = true,
     // Орбита: false = равномерно (дни равной ширины), true = по Кеплеру
     // (реальная угловая скорость Земли, расстояние до Солнца меняется).
     val keplerOrbit: Boolean = false,
@@ -272,10 +272,11 @@ private fun assignLayersByDuration(bands: List<EventBand>) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Мок-события — тот же набор, что во Flutter-версии.
+// Мок-события: «выдуманный пользователь» на всё окно ±6 мес от сегодня —
+// круг заполнен при любой дате (демо-режим, скриншоты, нет доступа к календарю).
 // ─────────────────────────────────────────────────────────────────────────────
 
-fun buildMockEvents(year: Int): List<CalendarEvent> {
+fun buildMockEvents(@Suppress("UNUSED_PARAMETER") year: Int): List<CalendarEvent> {
     val blue = 0xFF4A90D9.toInt()
     val green = 0xFF27AE60.toInt()
     val orange = 0xFFE67E22.toInt()
@@ -283,26 +284,41 @@ fun buildMockEvents(year: Int): List<CalendarEvent> {
     val teal = 0xFF16A085.toInt()
     val red = 0xFFE74C3C.toInt()
 
-    fun d(y: Int, m: Int, day: Int) = LocalDateTime.of(y, m, day, 0, 0)
+    val today = LocalDateTime.now().toLocalDate().atStartOfDay()
+    val m0 = today.withDayOfMonth(1)
+    // Месяц со сдвигом от текущего, день обрезается по длине месяца.
+    fun d(month: Long, day: Int): LocalDateTime {
+        val m = m0.plusMonths(month)
+        return m.withDayOfMonth(day.coerceIn(1, m.toLocalDate().lengthOfMonth()))
+    }
+    fun t(day: Long) = today.plusDays(day)
+    var n = 0
+    fun ev(en: String, ru: String, a: LocalDateTime, b: LocalDateTime, c: Int, cal: String, allDay: Boolean = false) =
+        CalendarEvent("m${n++}", tr(en, ru), a, b, c, cal, allDay)
 
     return listOf(
-        CalendarEvent("m1", tr("Vacation: seaside", "Отпуск: море"), d(year, 7, 14), d(year, 7, 28), teal, "personal"),
-        CalendarEvent("m2", tr("Business trip", "Командировка"), d(year, 3, 10), d(year, 3, 17), blue, "work"),
-        CalendarEvent("m3", tr("New Year in the mountains", "Новый год в горах"), d(year, 12, 29), d(year + 1, 1, 4), purple, "personal"),
-        CalendarEvent("m4", tr("Course: module 2", "Учёба: модуль 2"), d(year, 9, 1), d(year, 9, 30), orange, "edu"),
-        CalendarEvent("m5", tr("Apartment renovation", "Ремонт квартиры"), d(year, 5, 15), d(year, 6, 10), red, "personal"),
-        CalendarEvent("m6", tr("Project Alpha", "Проект Alpha"), d(year, 2, 1), d(year, 2, 20), blue, "work"),
-        CalendarEvent("m7", tr("Conference", "Конференция"), d(year, 2, 10), d(year, 2, 15), green, "work"),
-        CalendarEvent("m8", tr("Workshop", "Воркшоп"), d(year, 2, 12), d(year, 2, 13), orange, "work"),
-        CalendarEvent("m9", tr("Birthday", "День рождения"), d(year, 4, 17), d(year, 4, 18), purple, "personal", true),
-        CalendarEvent("m10", tr("Friend's birthday", "День рождения друга"), d(year, 8, 3), d(year, 8, 4), green, "personal", true),
-        CalendarEvent("m11", tr("Project deadline", "Дедлайн проекта"), d(year, 10, 31), d(year, 11, 1), red, "work", true),
-        CalendarEvent("m12", tr("Team offsite", "Встреча команды"), d(year, 6, 24), d(year, 6, 26), blue, "work"),
-        CalendarEvent("m13", tr("Car inspection", "Техосмотр"), d(year, 11, 5), d(year, 11, 7), orange, "personal"),
-        CalendarEvent("m14", tr("Hackathon", "Хакатон"), d(year, 4, 25), d(year, 4, 28), teal, "work"),
-        CalendarEvent("m15", tr("English course", "Курс английского"), d(year, 6, 1), d(year, 6, 30), green, "edu"),
-        CalendarEvent("m16", tr("Running", "Пробежки"), d(year, 6, 1), d(year, 8, 31), teal, "health"),
-        CalendarEvent("m17", tr("Diet", "Диета"), d(year, 6, 15), d(year, 7, 15), orange, "health"),
+        ev("Spring semester", "Весенний семестр", d(-6, 1), d(-3, 15), green, "edu"),
+        ev("Conference: Berlin", "Конференция: Берлин", d(-5, 10), d(-5, 14), blue, "work"),
+        ev("Mom's birthday", "День рождения мамы", d(-4, 3), d(-4, 4), purple, "personal", true),
+        ev("Hiking trip", "Поход", d(-4, 18), d(-4, 25), teal, "personal"),
+        ev("English course", "Курс английского", d(-3, 1), d(-2, 1), green, "edu"),
+        ev("Team offsite", "Выезд команды", d(-3, 12), d(-3, 15), blue, "work"),
+        ev("Running club", "Беговой клуб", d(-2, 1), d(0, 1), teal, "health"),
+        ev("Vacation: seaside", "Отпуск: море", d(-2, 14), d(-2, 28), orange, "personal"),
+        ev("Product launch", "Запуск продукта", d(-1, 5), d(-1, 9), red, "work"),
+        ev("Sprint 24", "Спринт 24", t(-6), t(8), blue, "work"),
+        ev("Trip to Lisbon", "Поездка в Лиссабон", t(4), t(9), orange, "personal"),
+        ev("Project deadline", "Дедлайн проекта", t(14), t(15), red, "work", true),
+        ev("UX course: module 2", "UX-курс: модуль 2", d(1, 1), d(2, 1), green, "edu"),
+        ev("Friend's birthday", "День рождения друга", d(1, 11), d(1, 12), purple, "personal", true),
+        ev("Hackathon", "Хакатон", d(1, 20), d(1, 23), teal, "work"),
+        ev("Car inspection", "Техосмотр", d(2, 5), d(2, 7), orange, "personal"),
+        ev("Holidays in the mountains", "Каникулы в горах", d(2, 24), d(3, 3), purple, "personal"),
+        ev("Ski trip", "Горнолыжка", d(3, 10), d(3, 18), teal, "personal"),
+        ev("Training plan", "План тренировок", d(4, 1), d(5, 1), orange, "health"),
+        ev("Anniversary", "Годовщина", d(4, 14), d(4, 15), purple, "personal", true),
+        ev("Business trip: Tokyo", "Командировка: Токио", d(5, 2), d(5, 9), blue, "work"),
+        ev("Tax return deadline", "Срок налоговой декларации", d(5, 20), d(5, 21), red, "personal", true),
     ) + shortMock(blue, green, orange, teal)
 }
 

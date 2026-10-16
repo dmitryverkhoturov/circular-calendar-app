@@ -32,7 +32,7 @@ class MainActivity : Activity() {
 
     private var settings = WheelSettings()
     private var events: List<CalendarEvent> = emptyList()
-    private var stress = false // отладка: тяжёлый календарь вместо реального
+    private var stress = false // отладка: тяжёлый календарь или демо вместо реального
     private var calendars: List<CalendarInfo>? = null
     private var now: LocalDateTime = LocalDateTime.now()
 
@@ -61,6 +61,12 @@ class MainActivity : Activity() {
 
     private fun loadSettings() {
         val p = getSharedPreferences("settings", MODE_PRIVATE)
+        // 0.17: новые умолчания (сейчас вверху, по часовой, короткие у края) —
+        // один раз переписываем сохранённые значения, дальше выбор пользователя.
+        if (!p.getBoolean("defaults017", false)) {
+            p.edit().putBoolean("ccw", false).putBoolean("nowBottom", false)
+                .putBoolean("largeTop", true).putBoolean("defaults017", true).apply()
+        }
         val filterStr = p.getString("calFilter", null)
         var filter = CalendarFilter()
         if (!filterStr.isNullOrEmpty()) {
@@ -73,11 +79,11 @@ class MainActivity : Activity() {
             }
         }
         settings = WheelSettings(
-            counterClockwise = p.getBoolean("ccw", true),
-            nowAtBottom = p.getBoolean("nowBottom", true),
+            counterClockwise = p.getBoolean("ccw", false),
+            nowAtBottom = p.getBoolean("nowBottom", false),
             design = Design.fromJson(p.getString("design", null)),
             calendarFilter = filter,
-            largeEventsOnTop = p.getBoolean("largeTop", false),
+            largeEventsOnTop = p.getBoolean("largeTop", true),
             keplerOrbit = p.getBoolean("kepler", false),
             showOrbits = p.getBoolean("orbits", false),
             arrowMoves = p.getBoolean("arrowMoves", false),
@@ -258,6 +264,12 @@ class MainActivity : Activity() {
         if (intent.hasExtra("dbg")) { wheel.dbg = intent.getIntExtra("dbg", 0); RDBG = wheel.dbg; wheel.update(settings, events, now) }
         if (intent.hasExtra("preset")) PRESETS.getOrNull(intent.getIntExtra("preset", 0))?.let { applyDesign(it.second) }
         if (intent.hasExtra("hud")) wheel.perfHud = intent.getBooleanExtra("hud", false)
+        // Демо-режим для скриншотов: только мок-пользователь, реальный календарь не подгружается.
+        if (intent.getBooleanExtra("demo", false)) {
+            stress = true
+            events = buildMockEvents(now.year)
+            wheel.update(settings, events, now)
+        }
         if (intent.getBooleanExtra("stress", false)) {
             stress = true
             events = buildStressEvents(now.year)
@@ -529,6 +541,23 @@ class MainActivity : Activity() {
         fun full(v: View) = col.addView(v, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
 
+        // ═════ Ориентация — первой: самое заметное, что меняется ═════
+        col.addView(label(getString(R.string.orientation)))
+        space(6f)
+        col.addView(toggle(listOf(getString(R.string.cw), getString(R.string.ccw)),
+            if (settings.counterClockwise) 1 else 0) { i ->
+            applySettings(settings.copy(counterClockwise = i == 1))
+        })
+        space(14f)
+
+        col.addView(label(getString(R.string.now_default)))
+        space(6f)
+        col.addView(toggle(listOf(getString(R.string.top), getString(R.string.bottom)),
+            if (settings.nowAtBottom) 1 else 0) { i ->
+            applySettings(settings.copy(nowAtBottom = i == 1))
+        })
+        space(14f)
+
         // ═════ Дизайн ═════
         col.addView(label(getString(R.string.design_style)))
         space(6f)
@@ -636,22 +665,6 @@ class MainActivity : Activity() {
         space(18f)
 
         // ═════ Поведение ═════
-        col.addView(label(getString(R.string.orientation)))
-        space(6f)
-        col.addView(toggle(listOf(getString(R.string.ccw), getString(R.string.cw)),
-            if (settings.counterClockwise) 0 else 1) { i ->
-            applySettings(settings.copy(counterClockwise = i == 0))
-        })
-        space(14f)
-
-        col.addView(label(getString(R.string.now_default)))
-        space(6f)
-        col.addView(toggle(listOf(getString(R.string.bottom), getString(R.string.top)),
-            if (settings.nowAtBottom) 0 else 1) { i ->
-            applySettings(settings.copy(nowAtBottom = i == 0))
-        })
-        space(14f)
-
         col.addView(label(getString(R.string.major_events)))
         space(6f)
         // «Снизу» — крупные у кольца дней (как раньше); «Сверху» — иерархия
