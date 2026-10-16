@@ -143,7 +143,7 @@ def main():
     os.makedirs(os.path.join(OUT, "screens"), exist_ok=True)
     hero().save(os.path.join(OUT, "hero.png"), optimize=True)
     grid([("plum", "side", ""), ("paper", "diag", ""), ("cartoon", "close", ""),
-          ("chalk", "days", "")], 4).save(os.path.join(OUT, "angles.png"), optimize=True)
+          ("chalk", "inday", "")], 4).save(os.path.join(OUT, "angles.png"), optimize=True)
     for f in sorted(os.listdir(SHOTS)):
         if f.endswith(".png"):
             im = Image.open(os.path.join(SHOTS, f)).convert("RGB")
