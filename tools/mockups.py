@@ -78,7 +78,7 @@ def hero():
                 font("nunito.ttf", 46), (200, 186, 230))
     # Symmetric: light themes outside, dark inside, Dusk in the centre.
     picks = [("paper", "days", 380), ("plum", "diag", 430), ("dusk", "rise", 500),
-             ("ink", "side", 430), ("classic", "days", 380)]
+             ("ink", "side", 430), ("chalk", "days", 380)]
     xs = [400, 790, 1200, 1610, 2000]
     # Layered: outer phones first, the centre one on top.
     for k in (0, 4, 1, 3, 2):
@@ -143,7 +143,7 @@ def main():
     os.makedirs(os.path.join(OUT, "screens"), exist_ok=True)
     hero().save(os.path.join(OUT, "hero.png"), optimize=True)
     grid([("plum", "side", ""), ("paper", "diag", ""), ("cartoon", "close", ""),
-          ("chalk", "inday", "")], 4).save(os.path.join(OUT, "angles.png"), optimize=True)
+          ("chalk", "near", "")], 4).save(os.path.join(OUT, "angles.png"), optimize=True)
     for f in sorted(os.listdir(SHOTS)):
         if f.endswith(".png"):
             im = Image.open(os.path.join(SHOTS, f)).convert("RGB")

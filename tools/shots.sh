@@ -24,9 +24,9 @@ PRESETS="${PRESETS:-0:dusk 1:cartoon 2:paper 3:plum 4:ink 5:chalk 6:classic}"
 # (rf -N = label row N: 1 day, 2 hours, 3 minutes, 4 seconds), secs = date offset from now.
 # "orbits" turns orbits on.
 # The circle is always centred horizontally; R ≈ 480 px at zoom 1 on a 1080x2400 screen.
-VIEWS="${VIEWS:-full:1.08:0:0.5:0.5 rise:2.6:0:0.5:0.85 month:7:0:0.5:1.7 side:2.4:-1.5708:1.25:0.5 diag:3.5:0.42:0.0:1.0 close:8:-0.32:1.6:2.0 days:22:1.476:::0.967::475200 inday:250:0.12:::0.977::-25000}"
-# "inday" aims at today 10:00–14:00 (demo coffee/lunch) via secs = offset from the time of
-# the run (-25000 s fits a run at ~18:30) — adjust secs when shooting at another hour.
+VIEWS="${VIEWS:-full:1.08:0:0.5:0.5 rise:2.6:0:0.5:0.85 month:7:0:0.5:1.7 side:2.4:-1.5708:1.25:0.5 diag:3.5:0.42:0.0:1.0 close:8:-0.32:1.6:2.0 days:22:1.476:::0.967::475200 near:75:1.5626:::0.98028::41000}"
+# "near": turned 90°, ~4 days with the demo's short events (yesterday..+2 days); secs is an
+# offset from the time of the run (41000 s fits a run at ~18:30) — adjust at another hour.
 # Rotation sequence, Dusk only: the same view turned step by step.
 ROT="rot0:1.25:0:0.5:0.55 rot1:1.25:0.5:0.5:0.55 rot2:1.25:1.0:0.5:0.55"
 for p in $PRESETS; do
