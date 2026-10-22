@@ -2,7 +2,7 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com). Versions: [docs/RELEASING.md](docs/RELEASING.md).
 
-## [Unreleased] — planned as 0.17.0
+## [0.17.0] — 2026-10-22
 
 ### Added
 - English UI by default; Russian, Spanish, Portuguese (BR), German, French, Italian,
@@ -16,6 +16,10 @@ Format: [Keep a Changelog](https://keepachangelog.com). Versions: [docs/RELEASIN
   to the top of the settings panel. Existing installs switch once to the new defaults.
 - Short events now sit at the outer edge of the ring by default; long events go inward.
 - Paper theme: bigger inner circle.
+- When the ring runs vertical, day, hour and minute digits turn 90° so they stay readable;
+  sideways day numbers grow to fill the band up to the events. Small event titles never
+  show upside down.
+- Dark status bar icons on light themes.
 - Fonts re-subset with Latin Extended (Polish, Turkish, etc.); Comfortaa shipped unmodified.
 
 ## [0.16.0] — 2026-10-02

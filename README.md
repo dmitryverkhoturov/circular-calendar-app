@@ -1,4 +1,4 @@
-# Circular Calendar
+# <img src="docs/images/icon.svg" width="48" height="48" alt="" align="top"> Circular Calendar
 
 ![Circular Calendar](docs/images/hero.png)
 

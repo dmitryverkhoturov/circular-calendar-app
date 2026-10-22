@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- App icon for the README. Same shapes and colours as
+     app/src/main/res/drawable/ic_launcher_foreground.xml on the launcher background,
+     cropped to the round adaptive-icon mask. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="18 18 72 72">
+  <defs>
+    <radialGradient id="side" gradientUnits="userSpaceOnUse" cx="54" cy="33" r="42">
+      <stop offset="0" stop-color="#A8287A" stop-opacity="0.25"/>
+      <stop offset="0.6" stop-color="#862A82" stop-opacity="0.82"/>
+      <stop offset="1" stop-color="#8E2C86"/>
+    </radialGradient>
+    <radialGradient id="mid" gradientUnits="userSpaceOnUse" cx="54" cy="33" r="42">
+      <stop offset="0" stop-color="#C2357F" stop-opacity="0.31"/>
+      <stop offset="0.6" stop-color="#A8327F" stop-opacity="0.88"/>
+      <stop offset="1" stop-color="#B83E92"/>
+    </radialGradient>
+    <clipPath id="mask"><circle cx="54" cy="54" r="36"/></clipPath>
+  </defs>
+  <g clip-path="url(#mask)">
+    <rect x="18" y="18" width="72" height="72" fill="#1A1347"/>
+    <path d="M54,33 L42.42,73.37 A42,42 0 0 1 24.82,63.21 Z" fill="url(#side)"/>
+    <path d="M54,33 L64.16,73.75 A42,42 0 0 1 43.84,73.75 Z" fill="url(#mid)"/>
+    <path d="M54,33 L83.18,63.21 A42,42 0 0 1 65.58,73.37 Z" fill="url(#side)"/>
+    <path d="M42.42,73.37 A42,42 0 0 1 24.82,63.21 M64.16,73.75 A42,42 0 0 1 43.84,73.75 M83.18,63.21 A42,42 0 0 1 65.58,73.37"
+          fill="none" stroke="#E58BC8" stroke-width="1.1" stroke-linecap="round"/>
+    <path d="M53.2,33 L54.8,33 L54.8,76.5 L54,81 L53.2,76.5 Z" fill="#FFB84D"/>
+  </g>
+</svg>
